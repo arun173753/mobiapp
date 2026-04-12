@@ -1,6 +1,4 @@
-# Deploy ./mobiapp to Cloud Run via Cloud Build.
-# Repository secret required: GCP_SA_KEY = full JSON key for a service account with
-# Cloud Build Editor, Storage (for GCR), and Cloud Run Admin (or equivalent) on this project.
+# Deploy mobiapp to Cloud Run. Repository secret: GCP_SA_KEY (service account JSON).
 name: Deploy mobiapp (Cloud Run)
 
 on:
@@ -10,11 +8,13 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 env:
-  PROJECT_ID: arunmobi-app
+  PROJECT_ID: mobi-backend-491410
   REGION: asia-south1
   SERVICE: mobiapp
+  IMAGE: gcr.io/mobi-backend-491410/mobiapp
 
 jobs:
   deploy:
@@ -24,23 +24,28 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # v3 runs on Node 24 (avoids deprecated Node 20 runtime warnings from older action majors).
       - name: Authenticate to Google Cloud
-        id: auth
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: Set up gcloud CLI
-        uses: google-github-actions/setup-gcloud@v3
+        uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      - name: Build container and deploy to Cloud Run
+      # Dockerfile lives under ./mobiapp; tag matches Cloud Run image.
+      - name: Build and push image
+        run: gcloud builds submit ./mobiapp --tag ${{ env.IMAGE }} --project ${{ env.PROJECT_ID }}
+
+      - name: Deploy to Cloud Run
         run: |
-          gcloud builds submit ./mobiapp \
-            --config mobiapp/cloudbuild.yaml \
-            --project="${{ env.PROJECT_ID }}"
+          gcloud run deploy ${{ env.SERVICE }} \
+            --image ${{ env.IMAGE }} \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --allow-unauthenticated \
+            --project ${{ env.PROJECT_ID }}
 
       - name: Print Cloud Run service URL
         run: |
