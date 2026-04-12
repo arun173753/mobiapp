@@ -16,9 +16,12 @@ app.get("/healthz", (_req, res) => {
 
 app.get("/", (_req, res) => {
   res.status(200).json({
-    service: "mobiapp",
-    project: "mobi-backend-491410",
-    region: "asia-south1",
+    service: process.env.K_SERVICE || "mobiapp",
+    project:
+      process.env.GOOGLE_CLOUD_PROJECT ||
+      process.env.GCLOUD_PROJECT ||
+      "mobi-backend-491410",
+    region: process.env.REGION || "asia-south1",
   });
 });
 

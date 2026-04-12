@@ -4,10 +4,11 @@
   "private": true,
   "description": "Lightweight Cloud Run service (deploy only this folder)",
   "scripts": {
+    "build": "node --check server.js",
     "start": "node server.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "dependencies": {
     "express": "^5.0.1"
