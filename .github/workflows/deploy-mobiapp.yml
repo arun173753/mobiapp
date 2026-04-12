@@ -1,31 +1,50 @@
-# Pushes only ./mobiapp to Cloud Build (lightweight). Requires secret GCP_SA_JSON.
+# Deploy ./mobiapp to Cloud Run via Cloud Build.
+# Repository secret required: GCP_SA_KEY = full JSON key for a service account with
+# Cloud Build Editor, Storage (for GCR), and Cloud Run Admin (or equivalent) on this project.
 name: Deploy mobiapp (Cloud Run)
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+env:
+  PROJECT_ID: arunmobi-app
+  REGION: asia-south1
+  SERVICE: mobiapp
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: google-github-actions/auth@v2
+      # v3 runs on Node 24 (avoids deprecated Node 20 runtime warnings from older action majors).
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v3
         with:
-          credentials_json: ${{ secrets.GCP_SA_JSON }}
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - uses: google-github-actions/setup-gcloud@v2
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v3
         with:
-          project_id: mobi-backend-491410
+          project_id: ${{ env.PROJECT_ID }}
 
-      - name: Cloud Build + deploy mobiapp
-        run: gcloud builds submit ./mobiapp --config mobiapp/cloudbuild.yaml --project=mobi-backend-491410
+      - name: Build container and deploy to Cloud Run
+        run: |
+          gcloud builds submit ./mobiapp \
+            --config mobiapp/cloudbuild.yaml \
+            --project="${{ env.PROJECT_ID }}"
 
-      - name: Service URL
-        run: gcloud run services describe mobiapp --region=asia-south1 --project=mobi-backend-491410 --format='value(status.url)'
+      - name: Print Cloud Run service URL
+        run: |
+          gcloud run services describe "${{ env.SERVICE }}" \
+            --region="${{ env.REGION }}" \
+            --project="${{ env.PROJECT_ID }}" \
+            --format='value(status.url)'

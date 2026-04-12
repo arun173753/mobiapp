@@ -1,3 +1,6 @@
+# Credentials written by google-github-actions/auth (never commit)
+gha-creds-*.json
+
 node_modules/
 .env
 .vscode/
