@@ -36,13 +36,36 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      # Dockerfile lives under ./mobiapp; tag matches Cloud Run image.
+      # Dockerfile lives under ./mobiapp; --async avoids log streaming (needs Viewer/Owner).
+      # Poll describe until SUCCESS so deploy runs only after the image is pushed.
       - name: Build and push image
         run: |
-          gcloud builds submit ./mobiapp \
-            --tag ${{ env.IMAGE }} \
-            --project ${{ env.PROJECT_ID }} \
-            --quiet
+          set -euo pipefail
+          JSON=$(gcloud builds submit ./mobiapp \
+            --tag "${{ env.IMAGE }}" \
+            --project "${{ env.PROJECT_ID }}" \
+            --async \
+            --quiet \
+            --format=json)
+          BUILD_ID=$(echo "$JSON" | python3 -c "import sys,json;d=json.load(sys.stdin);m=d.get('metadata')or{};b=m.get('build')if isinstance(m,dict)else None;bid=(b.get('id')if isinstance(b,dict)else'')or((d.get('name')or'').rsplit('/',1)[-1]);print(bid or'')")
+          if [ -z "$BUILD_ID" ]; then
+            echo "Could not parse Cloud Build id from async submit."
+            echo "$JSON"
+            exit 1
+          fi
+          echo "Cloud Build ID: $BUILD_ID"
+          while true; do
+            STATUS=$(gcloud builds describe "$BUILD_ID" --project "${{ env.PROJECT_ID }}" --format='value(status)')
+            echo "Build status: $STATUS"
+            case "$STATUS" in
+              SUCCESS) break ;;
+              FAILURE|CANCELLED|EXPIRED|TIMEOUT|INTERNAL_ERROR)
+                echo "Cloud Build finished with status: $STATUS"
+                exit 1
+                ;;
+              *) sleep 10 ;;
+            esac
+          done
 
       - name: Deploy to Cloud Run
         run: |
