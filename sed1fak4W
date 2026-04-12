@@ -1,0 +1,138 @@
+entrypoint = "README.md"
+modules = ["nodejs-22", "postgresql-16"]
+
+[nix]
+channel = "stable-24_05"
+packages = ["imagemagick"]
+
+[deployment]
+deploymentTarget = "cloudrun"
+build = ["sh", "-c", "npm run expo:static:build && npm run server:build"]
+run = ["npm", "run", "server:prod"]
+
+[[ports]]
+localPort = 5000
+
+[[ports]]
+localPort = 8081
+externalPort = 80
+
+[[ports]]
+localPort = 8082
+externalPort = 3001
+
+[[ports]]
+localPort = 9005
+externalPort = 3000
+
+[env]
+PORT = "5000"
+
+[agent]
+stack = "EXPO"
+integrations = ["javascript_openai_ai_integrations:2.0.0"]
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start App"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start Backend"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Deploy Frontend"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Deploy Backend"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Build AAB (Play Store)"
+
+[[workflows.workflow]]
+name = "Start App"
+author = "agent"
+mode = "parallel"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start Backend"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start Frontend"
+
+[[workflows.workflow]]
+name = "Start Frontend"
+author = "agent"
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run expo:dev"
+waitForPort = 8081
+ensurePreviewReachable = "/status"
+
+[[workflows.workflow]]
+name = "Start Backend"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node server_dist/index.js"
+
+[[workflows.workflow]]
+name = "Deploy Frontend"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "bash deploy-frontend.sh"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Deploy Backend"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "bash deploy-backend.sh"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Build AAB (Play Store)"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "bash build-aab.sh"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[userenv]
+
+[userenv.shared]
+EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID = "1097660126888-oui7uutiqbksd0q82nbvbhejbpo4t4s8.apps.googleusercontent.com"
+BUNNY_STORAGE_ZONE_NAME = "mobi-storage"
+BUNNY_STORAGE_REGION = "de"
+EXPO_PUBLIC_API_URL = "https://3704a5c1-1254-4f3f-a313-9b38cc37882b-00-m8oiuixqk98p.janeway.replit.dev"
+RESEND_API_KEY = "re_64xfbCVf_AVMxgL4Vvn6fYY3WzCJkn8Uw"

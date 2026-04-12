@@ -1,0 +1,12 @@
+FROM node:20-slim
+WORKDIR /app
+COPY server_dist/ ./server_dist/
+COPY server/templates/ ./server/templates/ 2>/dev/null || true
+COPY static-build/ ./static-build/ 2>/dev/null || true
+COPY patches/ ./patches/ 2>/dev/null || true
+COPY shared/ ./shared/ 2>/dev/null || true
+COPY bin/ ./bin/ 2>/dev/null || true
+RUN mkdir -p ./bin && chmod +x ./bin/ffmpeg 2>/dev/null || true
+EXPOSE 8080
+ENV PORT=8080 NODE_ENV=production
+CMD ["node", "server_dist/index.js"]

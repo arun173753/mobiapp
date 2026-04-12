@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: mobi-backend
+    runtime: node
+    startCommand: NODE_ENV=production node server_dist/index.js
+    buildCommand: npm install && npx esbuild server/index.ts --platform=node --bundle --format=cjs --external:*.node --outdir=server_dist
+    envVars:
+      - key: NODE_ENV
+        value: production

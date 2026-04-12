@@ -1,0 +1,16 @@
+node_modules
+.git
+.env.local
+.env
+*.log
+server_dist
+server
+src
+app
+lib
+components
+constants
+assets
+patches
+.expo
+# Vercel rebuild trigger

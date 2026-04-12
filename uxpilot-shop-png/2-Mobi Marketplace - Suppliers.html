@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mobi Marketplace - Suppliers</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script> window.FontAwesomeConfig = { autoReplaceSvg: 'nest'};</script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        mobi: {
+                            dark: '#687494', 
+                            card: '#5C6784', 
+                            accent: '#FF7B47', 
+                            text: '#FFFFFF',
+                            muted: '#E5E7EB',
+                            border: '#4A5568',
+                            success: '#10B981',
+                            warning: '#F59E0B',
+                            danger: '#EF4444'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #687494;
+            color: #FFFFFF;
+            font-family: 'Inter', sans-serif;
+            -webkit-text-size-adjust: 100%;
+        }
+        
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #687494;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #4A5568;
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #FF7B47;
+        }
+        
+        .glass-panel {
+            background: rgba(92, 103, 132, 0.7);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .gradient-bg {
+            background: linear-gradient(135deg, rgba(255, 123, 71, 0.15) 0%, rgba(104, 116, 148, 0) 100%);
+        }
+        
+        .app-container {
+            width: 100%;
+            max-width: 1280px;
+            margin: 0 auto;
+            min-height: 100vh;
+            position: relative;
+            background-color: #687494;
+        }
+        
+        @media (min-width: 1024px) {
+            .app-container {
+                display: grid;
+                grid-template-columns: 240px 1fr;
+            }
+        }
+
+        .hide-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .hide-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        /* Map Toggle Switch */
+        .toggle-checkbox:checked {
+            right: 0;
+            border-color: #FF7B47;
+        }
+        .toggle-checkbox:checked + .toggle-label {
+            background-color: #FF7B47;
+        }
+        .toggle-checkbox:checked + .toggle-label:after {
+            transform: translateX(100%);
+            border-color: white;
+        }
+    </style>
+</head>
+<body>
+
+<div class="app-container" id="app-root">
+    
+    <!-- Desktop Sidebar -->
+    <aside class="hidden lg:flex flex-col border-r border-mobi-border p-6 sticky top-0 h-screen" id="desktop-sidebar">
+        <div class="flex items-center justify-between mb-8">
+            <h1 class="text-2xl font-bold tracking-tight">Mobi <span class="text-mobi-accent">Suppliers</span></h1>
+        </div>
+        <nav class="space-y-4">
+            <a href="#" class="flex items-center gap-3 text-mobi-muted hover:text-white transition"><i class="fa-solid fa-video w-5"></i> Live</a>
+            <a href="#" class="flex items-center gap-3 text-mobi-muted hover:text-white transition"><i class="fa-solid fa-box-open w-5"></i> Products</a>
+            <a href="#" class="flex items-center gap-3 text-mobi-accent font-medium"><i class="fa-solid fa-truck-fast w-5"></i> Suppliers</a>
+            <a href="#" class="flex items-center gap-3 text-mobi-muted hover:text-white transition"><i class="fa-solid fa-handshake w-5"></i> Buy & Sell</a>
+            <a href="#" class="flex items-center gap-3 text-mobi-muted hover:text-white transition"><i class="fa-solid fa-bullhorn w-5"></i> Ads</a>
+        </nav>
+    </aside>
+
+    <div class="flex flex-col w-full min-h-screen relative">
+        <!-- Top Header & Search -->
+        <header class="pt-4 md:pt-8 pb-4 px-4 md:px-8 z-20 bg-mobi-dark sticky top-0 border-b border-mobi-border/30" id="main-header">
+            <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+                <div class="flex items-center justify-between w-full md:w-auto">
+                    <h1 class="text-xl md:text-2xl font-bold tracking-tight lg:hidden">Mobi <span class="text-mobi-accent">Suppliers</span></h1>
+                    <button class="lg:hidden text-white text-2xl" aria-label="Open Menu">
+                        <i class="fa-solid fa-bars"></i>
+                    </button>
+                </div>
+                <div class="flex-1 max-w-2xl w-full">
+                    <div class="relative flex items-center">
+                        <i class="fa-solid fa-search absolute left-4 text-mobi-muted"></i>
+                        <input type="text" placeholder="Search suppliers by name, specialty, or location..." class="w-full bg-mobi-card text-white rounded-full py-3 pl-11 pr-12 focus:outline-none border border-mobi-border shadow-sm">
+                        <button class="absolute right-3 w-8 h-8 rounded-full bg-mobi-accent flex items-center justify-center text-white hover:bg-orange-600 transition">
+                            <i class="fa-solid fa-arrow-right text-sm"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="flex gap-3 items-center hidden md:flex">
+                    <button class="w-10 h-10 rounded-full bg-mobi-card flex items-center justify-center hover:bg-mobi-border transition shadow-sm border border-mobi-border">
+                        <i class="fa-regular fa-bell"></i>
+                    </button>
+                    <div class="w-10 h-10 rounded-full overflow-hidden border-2 border-mobi-accent shadow-sm">
+                        <img class="w-full h-full object-cover" src="https://storage.googleapis.com/uxpilot-auth.appspot.com/avatars/avatar-4.jpg" alt="Profile" />
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Filters Bar & View Toggle -->
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mt-4 pb-2">
+                <div class="flex flex-nowrap overflow-x-auto hide-scrollbar gap-3 items-center w-full sm:w-auto" id="filters-bar">
+                    <button aria-haspopup="true" aria-expanded="false" class="flex-shrink-0 flex items-center gap-2 bg-mobi-accent text-white rounded-full px-4 py-2 border border-mobi-accent cursor-pointer transition shadow-sm">
+                        <i class="fa-solid fa-location-crosshairs text-sm"></i>
+                        <span class="text-sm font-medium">Within 50 miles</span>
+                        <i class="fa-solid fa-chevron-down text-xs ml-1"></i>
+                    </button>
+                    
+                    <button aria-haspopup="true" aria-expanded="false" class="flex-shrink-0 flex items-center gap-2 bg-mobi-card rounded-full px-4 py-2 border border-mobi-border cursor-pointer hover:bg-mobi-border transition">
+                        <i class="fa-solid fa-wrench text-mobi-muted text-sm"></i>
+                        <span class="text-sm font-medium text-white">Categories</span>
+                        <i class="fa-solid fa-chevron-down text-xs text-mobi-muted ml-1"></i>
+                    </button>
+
+                    <button class="flex-shrink-0 flex items-center gap-2 bg-mobi-card rounded-full px-4 py-2 border border-mobi-border cursor-pointer hover:bg-mobi-border transition">
+                        <i class="fa-solid fa-certificate text-blue-400 text-sm"></i>
+                        <span class="text-sm font-medium text-white">Verified Only</span>
+                    </button>
+
+                    <button aria-haspopup="true" aria-expanded="false" class="flex-shrink-0 flex items-center gap-2 bg-mobi-card rounded-full px-4 py-2 border border-mobi-border cursor-pointer hover:bg-mobi-border transition">
+                        <i class="fa-solid fa-bolt text-mobi-warning text-sm"></i>
+                        <span class="text-sm font-medium text-white">Response Time</span>
+                        <i class="fa-solid fa-chevron-down text-xs text-mobi-muted ml-1"></i>
+                    </button>
+                </div>
+                
+                <!-- List/Map Toggle -->
+                <div class="flex bg-mobi-card rounded-lg p-1 border border-mobi-border self-end sm:self-auto w-full sm:w-auto">
+                    <button class="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 sm:px-4 py-1.5 rounded-md bg-mobi-accent text-white shadow-sm transition">
+                        <i class="fa-solid fa-list-ul"></i>
+                        <span class="text-sm font-medium">List</span>
+                    </button>
+                    <button class="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 sm:px-4 py-1.5 rounded-md text-mobi-muted hover:text-white transition">
+                        <i class="fa-solid fa-map-location-dot"></i>
+                        <span class="text-sm font-medium">Map</span>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Supplier List -->
+        <main class="flex-1 overflow-y-auto px-4 md:px-8 pb-28 pt-6" id="supplier-main">
+            
+            <div class="flex justify-between items-end mb-6">
+                <div>
+                    <h2 class="text-2xl md:text-3xl font-bold mb-1">Supplier Directory</h2>
+                    <p class="text-sm text-mobi-muted">Showing 142 suppliers near you</p>
+                </div>
+                <div class="hidden sm:flex items-center gap-2 text-sm text-mobi-muted">
+                    <span>Sort by:</span>
+                    <select class="bg-transparent border-none text-white font-medium focus:ring-0 cursor-pointer">
+                        <option value="distance">Distance (Nearest)</option>
+                        <option value="rating">Highest Rated</option>
+                        <option value="name">Name (A-Z)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="flex flex-col gap-4" id="supplier-list">
+                
+                <!-- Supplier Card 1 -->
+                <div class="bg-mobi-card rounded-xl border border-mobi-border p-4 md:p-6 hover:border-mobi-accent transition-colors shadow-sm flex flex-col md:flex-row gap-4 md:gap-6">
+                    <!-- Logo & Basic Info -->
+                    <div class="flex gap-4 md:w-1/3 min-w-0">
+                        <div class="w-16 h-16 md:w-20 md:h-20 rounded-lg bg-white p-2 flex-shrink-0 border border-gray-200 flex items-center justify-center relative">
+                            <img class="w-full h-full object-contain" src="https://storage.googleapis.com/uxpilot-auth.appspot.com/9a6dd88066-2d34611cccc5dd0bab85.png" alt="minimalist tech repair logo, flat design, professional blue and gray" />
+                            <div class="absolute -top-2 -right-2 bg-blue-500 text-white w-6 h-6 rounded-full flex items-center justify-center border-2 border-mobi-card" title="Verified Supplier">
+                                <i class="fa-solid fa-check text-[10px]"></i>
+                            </div>
+                        </div>
+                        <div class="flex flex-col justify-center min-w-0">
+                            <div class="flex items-center gap-2 mb-1">
+                                <h3 class="font-bold text-lg leading-tight text-white truncate">TechFix Parts Depot</h3>
+                            </div>
+                            <div class="flex items-center gap-1 text-mobi-warning text-sm mb-1">
+                                <i class="fa-solid fa-star"></i>
+                                <span class="font-bold text-white">4.9</span>
+                                <span class="text-mobi-muted text-xs">(342 reviews)</span>
+                            </div>
+                            <div class="flex items-center gap-2 text-xs">
+                                <span class="flex items-center gap-1 text-mobi-success font-medium">
+                                    <span class="w-2 h-2 rounded-full bg-mobi-success"></span> Open Now
+                                </span>
+                                <span class="text-mobi-muted">• Closes 6PM</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Details -->
+                    <div class="flex-1 flex flex-col justify-center border-t border-mobi-border pt-4 md:border-t-0 md:pt-0 md:border-l md:pl-6">
+                        <div class="grid grid-cols-2 gap-y-2 gap-x-4 mb-3">
+                            <div class="flex items-start gap-2 text-sm">
+                                <i class="fa-solid fa-location-dot text-mobi-muted mt-1 w-4 text-center"></i>
+                                <div>
+                                    <p class="text-white">12.4 miles away</p>
+                                    <p class="text-mobi-muted text-xs">San Jose, CA</p>
+                                </div>
+                            </div>
+                            <div class="flex items-start gap-2 text-sm">
+                                <i class="fa-solid fa-bolt text-mobi-warning mt-1 w-4 text-center"></i>
+                                <div>
+                                    <p class="text-white">Fast Response</p>
+                                    <p class="text-mobi-muted text-xs">Usually within 15 mins</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            <span class="bg-mobi-dark text-xs px-2 py-1 rounded-md text-mobi-muted border border-mobi-border/50">OEM Parts</span>
+                            <span class="bg-mobi-dark text-xs px-2 py-1 rounded-md text-mobi-muted border border-mobi-border/50">Micro-soldering Tools</span>
+                            <span class="bg-mobi-dark text-xs px-2 py-1 rounded-md text-mobi-muted border border-mobi-border/50">Screens</span>
+                        </div>
+                    </div>
+
+                    <!-- Actions -->
+                    <div class="flex flex-row md:flex-col justify-end gap-2 md:w-32 border-t border-mobi-border pt-4 md:border-t-0 md:pt-0">
+                        <button class="flex-1 md:flex-none flex items-center justify-center gap-2 bg-mobi-accent hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition shadow-sm">
+                            <i class="fa-solid fa-comment-dots"></i> Chat
+                        </button>
+                        <button class="flex-1 md:flex-none flex items-center justify-center gap-2 bg-mobi-dark hover:bg-mobi-border text-white px-4 py-2 rounded-lg text-sm font-medium border border-mobi-border transition">
+                            <i class="fa-solid fa-phone"></i> Call
+                        </button>
+                        <button class="w-10 h-10 md:w-full md:h-auto flex items-center justify-center gap-2 bg-transparent hover:bg-mobi-dark text-mobi-muted hover:text-white md:px-4 md:py-2 rounded-lg text-sm font-medium transition border border-transparent hover:border-mobi-border md:mt-auto">
+                            <i class="fa-solid fa-file-invoice-dollar hidden md:block"></i>
+                            <i class="fa-solid fa-ellipsis-vertical md:hidden"></i>
+                            <span class="hidden md:block">Quote</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Supplier Card 2 -->
+                <div class="bg-mobi-card rounded-xl border border-mobi-border p-4 md:p-6 hover:border-mobi-accent transition-colors shadow-sm flex flex-col md:flex-row gap-4 md:gap-6">
+                    <!-- Logo & Basic Info -->
+                    <div class="flex gap-4 md:w-1/3 min-w-0">
+                        <div class="w-16 h-16 md:w-20 md:h-20 rounded-lg bg-white p-2 flex-shrink-0 border border-gray-200 flex items-center justify-center relative">
+                            <img class="w-full h-full object-contain" src="https://storage.googleapis.com/uxpilot-auth.appspot.com/19d2bfa81e-7a5c2fcee20805b7ff7c.png" alt="modern electronics supply logo, clean geometric style, orange and dark gray" />
+                            <div class="absolute -top-2 -right-2 bg-blue-500 text-white w-6 h-6 rounded-full flex items-center justify-center border-2 border-mobi-card" title="Verified Supplier">
+                                <i class="fa-solid fa-check text-[10px]"></i>
+                            </div>
+                        </div>
+                        <div class="flex flex-col justify-center min-w-0">
+                            <div class="flex items-center gap-2 mb-1">
+                                <h3 class="font-bold text-lg leading-tight text-white truncate">ElectroSupply Pro</h3>
+                            </div>
+                            <div class="flex items-center gap-1 text-mobi-warning text-sm mb-1">
+                                <i class="fa-solid fa-star"></i>
+                                <span class="font-bold text-white">4.7</span>
+                                <span class="text-mobi-muted text-xs">(189 reviews)</span>
+                            </div>
+                            <div class="flex items-center gap-2 text-xs">
+                                <span class="flex items-center gap-1 text-mobi-success font-medium">
+                                    <span class="w-2 h-2 rounded-full bg-mobi-success"></span> Open Now
+                                </span>
+                                <span class="text-mobi-muted">• Closes 8PM</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Details -->
+                    <div class="flex-1 flex flex-col justify-center border-t border-mobi-border pt-4 md:border-t-0 md:pt-0 md:border-l md:pl-6">
+                        <div class="grid grid-cols-2 gap-y-2 gap-x-4 mb-3">
+                            <div class="flex items-start gap-2 text-sm">
+                                <i class="fa-solid fa-location-dot text-mobi-muted mt-1 w-4 text-center"></i>
+                                <div>
+                                    <p class="text-white">18.2 miles away</p>
+                                    <p class="text-mobi-muted text-xs">Santa Clara, CA</p>
+                                </div>
+                            </div>
+                            <div class="flex items-start gap-2 text-sm">
+                                <i class="fa-solid fa-clock text-mobi-muted mt-1 w-4 text-center"></i>
+                                <div>
+                                    <p class="text-white">Standard Response</p>
+                                    <p class="text-mobi-muted text-xs">Usually within 2 hours</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            <span class="bg-mobi-dark text-xs px-2 py-1 rounded-md text-mobi-muted border border-mobi-border/50">Refurbished</span>
+                            <span class="bg-mobi-dark text-xs px-2 py-1 rounded-md text-mobi-muted border border-mobi-border/50">Logic Boards</span>
+                            <span class="bg-mobi-dark text-xs px-2 py-1 rounded-md text-mobi-muted border border-mobi-border/50">Batteries</span>
+                        </div>
+                    </div>
+
+                    <!-- Actions -->
+                    <div class="flex flex-row md:flex-col justify-end gap-2 md:w-32 border-t border-mobi-border pt-4 md:border-t-0 md:pt-0">
+                        <button class="flex-1 md:flex-none flex items-center justify-center gap-2 bg-mobi-accent hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition shadow-sm">
+                            <i class="fa-solid fa-comment-dots"></i> Chat
+                        </button>
+                        <button class="flex-1 md:flex-none flex items-center justify-center gap-2 bg-mobi-dark hover:bg-mobi-border text-white px-4 py-2 rounded-lg text-sm font-medium border border-mobi-border transition">
+                            <i class="fa-solid fa-phone"></i> Call
+                        </button>
+                        <button class="w-10 h-10 md:w-full md:h-auto flex items-center justify-center gap-2 bg-transparent hover:bg-mobi-dark text-mobi-muted hover:text-white md:px-4 md:py-2 rounded-lg text-sm font-medium transition border border-transparent hover:border-mobi-border md:mt-auto">
+                            <i class="fa-solid fa-file-invoice-dollar hidden md:block"></i>
+                            <i class="fa-solid fa-ellipsis-vertical md:hidden"></i>
+                            <span class="hidden md:block">Quote</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Supplier Card 3 (Closed) -->
+                <div class="bg-mobi-card rounded-xl border border-mobi-border p-4 md:p-6 hover:border-mobi-accent transition-colors shadow-sm flex flex-col md:flex-row gap-4 md:gap-6 opacity-80">
+                    <!-- Logo & Basic Info -->
+                    <div class="flex gap-4 md:w-1/3 min-w-0">
+                        <div class="w-16 h-16 md:w-20 md:h-20 rounded-lg bg-gray-200 p-2 flex-shrink-0 border border-gray-300 flex items-center justify-center relative grayscale">
+                            <img class="w-full h-full object-contain mix-blend-multiply" src="https://storage.googleapis.com/uxpilot-auth.appspot.com/381636fa9f-fc5efc82658cf709ac59.png" alt="industrial tool supplier logo, rugged professional icon, monochrome" />
+                        </div>
+                        <div class="flex flex-col justify-center min-w-0">
+                            <div class="flex items-center gap-2 mb-1">
+                                <h3 class="font-bold text-lg leading-tight text-gray-300 truncate">Global Repair Tools</h3>
+                            </div>
+                            <div class="flex items-center gap-1 text-mobi-warning text-sm mb-1">
+                                <i class="fa-solid fa-star"></i>
+                                <span class="font-bold text-gray-300">4.5</span>
+                                <span class="text-gray-400 text-xs">(87 reviews)</span>
+                            </div>
+                            <div class="flex items-center gap-2 text-xs">
+                                <span class="flex items-center gap-1 text-mobi-danger font-medium">
+                                    <span class="w-2 h-2 rounded-full bg-mobi-danger"></span> Closed
+                                </span>
+                                <span class="text-gray-400">• Opens 8AM Tomorrow</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Details -->
+                    <div class="flex-1 flex flex-col justify-center border-t border-mobi-border pt-4 md:border-t-0 md:pt-0 md:border-l md:pl-6">
+                        <div class="grid grid-cols-2 gap-y-2 gap-x-4 mb-3">
+                            <div class="flex items-start gap-2 text-sm">
+                                <i class="fa-solid fa-location-dot text-gray-400 mt-1 w-4 text-center"></i>
+                                <div>
+                                    <p class="text-gray-300">24.5 miles away</p>
+                                    <p class="text-gray-400 text-xs">Fremont, CA</p>
+                                </div>
+                            </div>
+                            <div class="flex items-start gap-2 text-sm">
+                                <i class="fa-solid fa-envelope text-gray-400 mt-1 w-4 text-center"></i>
+                                <div>
+                                    <p class="text-gray-300">Leave a Message</p>
+                                    <p class="text-gray-400 text-xs">Replies next business day</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            <span class="bg-mobi-dark text-xs px-2 py-1 rounded-md text-gray-400 border border-mobi-border/50">Heavy Equipment</span>
+                            <span class="bg-mobi-dark text-xs px-2 py-1 rounded-md text-gray-400 border border-mobi-border/50">Microscopes</span>
+                        </div>
+                    </div>
+
+                    <!-- Actions -->
+                    <div class="flex flex-row md:flex-col justify-end gap-2 md:w-32 border-t border-mobi-border pt-4 md:border-t-0 md:pt-0">
+                        <button class="flex-1 md:flex-none flex items-center justify-center gap-2 bg-mobi-dark hover:bg-mobi-border text-white px-4 py-2 rounded-lg text-sm font-medium border border-mobi-border transition">
+                            <i class="fa-solid fa-envelope"></i> Message
+                        </button>
+                        <button class="flex-1 md:flex-none flex items-center justify-center gap-2 bg-transparent text-mobi-muted px-4 py-2 rounded-lg text-sm font-medium cursor-not-allowed border border-transparent">
+                            <i class="fa-solid fa-phone-slash"></i> Call
+                        </button>
+                        <button class="w-10 h-10 md:w-full md:h-auto flex items-center justify-center gap-2 bg-transparent hover:bg-mobi-dark text-gray-400 hover:text-white md:px-4 md:py-2 rounded-lg text-sm font-medium transition border border-transparent hover:border-mobi-border md:mt-auto">
+                            <i class="fa-solid fa-file-invoice-dollar hidden md:block"></i>
+                            <i class="fa-solid fa-ellipsis-vertical md:hidden"></i>
+                            <span class="hidden md:block">Quote</span>
+                        </button>
+                    </div>
+                </div>
+
+            </div>
+            
+            <!-- Pagination -->
+            <div class="flex justify-center mt-10 mb-8" id="pagination">
+                <div class="flex gap-2">
+                    <button class="w-10 h-10 rounded-lg bg-mobi-card border border-mobi-border flex items-center justify-center text-mobi-muted hover:text-white hover:border-mobi-accent transition"><i class="fa-solid fa-chevron-left"></i></button>
+                    <button class="w-10 h-10 rounded-lg bg-mobi-accent text-white font-bold flex items-center justify-center shadow-md">1</button>
+                    <button class="w-10 h-10 rounded-lg bg-mobi-card border border-mobi-border flex items-center justify-center text-white hover:border-mobi-accent transition">2</button>
+                    <button class="w-10 h-10 rounded-lg bg-mobi-card border border-mobi-border flex items-center justify-center text-white hover:border-mobi-accent transition">3</button>
+                    <span class="w-10 h-10 flex items-center justify-center text-mobi-muted">...</span>
+                    <button class="w-10 h-10 rounded-lg bg-mobi-card border border-mobi-border flex items-center justify-center text-white hover:border-mobi-accent transition">8</button>
+                    <button class="w-10 h-10 rounded-lg bg-mobi-card border border-mobi-border flex items-center justify-center text-mobi-muted hover:text-white hover:border-mobi-accent transition"><i class="fa-solid fa-chevron-right"></i></button>
+                </div>
+            </div>
+
+        </main>
+
+        <!-- Bottom Navigation Bar -->
+        <nav class="fixed bottom-0 w-full lg:hidden glass-panel border-t border-mobi-border pb-safe pt-2 px-6 pb-6 z-30 rounded-t-3xl" id="bottom-nav">
+            <div class="flex justify-between items-center max-w-md mx-auto">
+                <a href="#" class="flex flex-col items-center gap-1 text-mobi-muted hover:text-white transition">
+                    <div class="w-12 h-8 rounded-full flex items-center justify-center">
+                        <i class="fa-solid fa-video text-lg"></i>
+                    </div>
+                    <span class="text-[10px] font-medium">Live</span>
+                </a>
+                
+                <a href="#" class="flex flex-col items-center gap-1 text-mobi-muted hover:text-white transition">
+                    <div class="w-12 h-8 rounded-full flex items-center justify-center">
+                        <i class="fa-solid fa-box-open text-lg"></i>
+                    </div>
+                    <span class="text-[10px] font-medium">Products</span>
+                </a>
+                
+                <a href="#" class="flex flex-col items-center gap-1 text-mobi-accent">
+                    <div class="w-12 h-8 rounded-full bg-mobi-accent/20 flex items-center justify-center">
+                        <i class="fa-solid fa-truck-fast text-lg"></i>
+                    </div>
+                    <span class="text-[10px] font-medium">Suppliers</span>
+                </a>
+                
+                <a href="#" class="flex flex-col items-center gap-1 text-mobi-muted hover:text-white transition">
+                    <div class="w-12 h-8 rounded-full flex items-center justify-center">
+                        <i class="fa-solid fa-handshake text-lg"></i>
+                    </div>
+                    <span class="text-[10px] font-medium">Buy & Sell</span>
+                </a>
+                
+                <a href="#" class="flex flex-col items-center gap-1 text-mobi-muted hover:text-white transition">
+                    <div class="w-12 h-8 rounded-full flex items-center justify-center">
+                        <i class="fa-solid fa-bullhorn text-lg"></i>
+                    </div>
+                    <span class="text-[10px] font-medium">Ads</span>
+                </a>
+            </div>
+        </nav>
+
+    </div>
+</div>
+
+</body>
+</html>

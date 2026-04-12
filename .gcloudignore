@@ -1,0 +1,76 @@
+# Match .gitignore for clean uploads + omit git metadata (not needed for Docker build)
+.git/
+.github/
+
+# Dependencies & caches
+node_modules/
+.cache/
+.bun/
+.local/
+
+# Build / export
+dist/
+build/
+web-build/
+server_dist/
+static-build/
+public/
+*.tsbuildinfo
+
+# Env & secrets
+.env
+.env*.local
+
+# Logs
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# Expo
+.expo/
+.expo-shared/
+expo-env.d.ts
+
+# Native (not needed for API image)
+android/
+ios/
+android-rn/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# OS / editor
+.DS_Store
+*.pem
+.vercel
+.cursor/
+.vscode/
+.idea/
+
+# User uploads & local assets
+uploads/
+attached_assets/
+
+# Replit
+.replit
+replit.nix
+.breakpoints
+
+# Archives
+*.tar.gz
+*.tar
+
+# Frontend only at repo root (do not match server/lib)
+/app/
+/components/
+/constants/
+/hooks/
+/lib/
+/references/

@@ -1,0 +1,26 @@
+# Submit from repo root: gcloud builds submit ./mobiapp --config mobiapp/cloudbuild.yaml --project=mobi-backend-491410
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/mobiapp', '.']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/mobiapp']
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'mobiapp'
+      - '--image=gcr.io/$PROJECT_ID/mobiapp'
+      - '--region=asia-south1'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--project=$PROJECT_ID'
+      - '--memory=512Mi'
+      - '--cpu=1'
+      - '--port=8080'
+      - '--timeout=60'
+
+images:
+  - 'gcr.io/$PROJECT_ID/mobiapp'

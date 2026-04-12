@@ -1,0 +1,15 @@
+{
+  "name": "mobiapp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lightweight Cloud Run service (deploy only this folder)",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^5.0.1"
+  }
+}

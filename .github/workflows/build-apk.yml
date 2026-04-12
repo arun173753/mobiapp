@@ -1,0 +1,32 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm install
+      
+      - name: Setup EAS CLI
+        run: npm install -g eas-cli@latest
+      
+      - name: Build APK with EAS
+        env:
+          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
+        run: |
+          eas build --platform android --profile preview --non-interactive --wait || true
+          echo "Build submitted! Check Expo dashboard at https://expo.dev"

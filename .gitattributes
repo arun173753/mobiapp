@@ -1,0 +1,4 @@
+mobi-latest.zip filter=lfs diff=lfs merge=lfs -text
+downloads/full-project.zip filter=lfs diff=lfs merge=lfs -text
+project.zip filter=lfs diff=lfs merge=lfs -text
+android.zip filter=lfs diff=lfs merge=lfs -text

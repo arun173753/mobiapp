@@ -1,0 +1,65 @@
+name: Build AAB (Play Store)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.0)'
+        required: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      
+      - name: Install dependencies
+        run: npm install
+      
+      - name: Generate native Android files
+        run: npx expo prebuild --clean --platform android --no-install
+      
+      - name: Build AAB
+        run: cd android && ./gradlew bundleRelease
+      
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobi-app-bundle
+          path: android/app/build/outputs/bundle/release/app-release.aab
+          retention-days: 30
+      
+      - name: Create Release
+        if: github.event.inputs.version != ''
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          release_name: Release ${{ github.event.inputs.version }}
+          draft: true
+          prerelease: false
+      
+      - name: Upload to Release
+        if: github.event.inputs.version != ''
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: android/app/build/outputs/bundle/release/app-release.aab
+          asset_name: mobi-app-release.aab
+          asset_content_type: application/octet-stream

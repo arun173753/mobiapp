@@ -1,0 +1,31 @@
+# Pushes only ./mobiapp to Cloud Build (lightweight). Requires secret GCP_SA_JSON.
+name: Deploy mobiapp (Cloud Run)
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_JSON }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: mobi-backend-491410
+
+      - name: Cloud Build + deploy mobiapp
+        run: gcloud builds submit ./mobiapp --config mobiapp/cloudbuild.yaml --project=mobi-backend-491410
+
+      - name: Service URL
+        run: gcloud run services describe mobiapp --region=asia-south1 --project=mobi-backend-491410 --format='value(status.url)'

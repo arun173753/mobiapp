@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mobi Marketplace - Buy & Sell</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script> window.FontAwesomeConfig = { autoReplaceSvg: 'nest'};</script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        mobi: {
+                            dark: '#687494', 
+                            card: '#5C6784', 
+                            accent: '#FF7B47', 
+                            text: '#FFFFFF',
+                            muted: '#E5E7EB',
+                            border: '#4A5568',
+                            success: '#10B981',
+                            warning: '#F59E0B',
+                            danger: '#EF4444'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #687494;
+            color: #FFFFFF;
+            font-family: 'Inter', sans-serif;
+            -webkit-text-size-adjust: 100%;
+        }
+        
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #687494;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #4A5568;
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #FF7B47;
+        }
+        
+        .glass-panel {
+            background: rgba(92, 103, 132, 0.7);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .app-container {
+            width: 100%;
+            max-width: 1280px;
+            margin: 0 auto;
+            min-height: 100vh;
+            position: relative;
+            background-color: #687494;
+        }
+        
+        @media (min-width: 1024px) {
+            .app-container {
+                display: grid;
+                grid-template-columns: 240px 1fr;
+            }
+        }
+
+        .hide-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .hide-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+<body>
+
+<div class="app-container" id="app-root">
+    
+    <!-- Desktop Sidebar -->
+    <aside class="hidden lg:flex flex-col border-r border-mobi-border p-6 sticky top-0 h-screen" id="desktop-sidebar">
+        <div class="flex items-center justify-between mb-8">
+            <h1 class="text-2xl font-bold tracking-tight">Mobi <span class="text-mobi-accent">Buy & Sell</span></h1>
+        </div>
+        <nav class="space-y-4">
+            <a href="#" class="flex items-center gap-3 text-mobi-muted hover:text-white transition"><i class="fa-solid fa-video w-5"></i> Live</a>
+            <a href="#" class="flex items-center gap-3 text-mobi-muted hover:text-white transition"><i class="fa-solid fa-box-open w-5"></i> Products</a>
+            <a href="#" class="flex items-center gap-3 text-mobi-muted hover:text-white transition"><i class="fa-solid fa-truck-fast w-5"></i> Suppliers</a>
+            <a href="#" class="flex items-center gap-3 text-mobi-accent font-medium"><i class="fa-solid fa-handshake w-5"></i> Buy & Sell</a>
+            <a href="#" class="flex items-center gap-3 text-mobi-muted hover:text-white transition"><i class="fa-solid fa-bullhorn w-5"></i> Ads</a>
+        </nav>
+    </aside>
+
+    <div class="flex flex-col w-full min-h-screen relative">
+        <!-- Top Header & Search -->
+        <header class="pt-4 md:pt-8 pb-4 px-4 md:px-8 z-20 bg-mobi-dark sticky top-0 border-b border-mobi-border/30" id="main-header">
+            <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+                <div class="flex items-center justify-between w-full md:w-auto">
+                    <h1 class="text-xl md:text-2xl lg:text-3xl font-bold tracking-tight lg:hidden">Mobi <span class="text-mobi-accent">Buy & Sell</span></h1>
+                    <button class="lg:hidden text-white text-2xl p-2 hover:bg-mobi-card rounded-lg transition" aria-label="Open Menu">
+                        <i class="fa-solid fa-bars"></i>
+                    </button>
+                </div>
+                <div class="flex-1 max-w-2xl w-full">
+                    <div class="relative flex items-center">
+                        <i class="fa-solid fa-search absolute left-4 text-mobi-muted"></i>
+                        <input type="text" placeholder="Search classifieds..." class="w-full bg-mobi-card text-white rounded-full py-3 pl-11 pr-12 focus:outline-none border border-mobi-border shadow-sm">
+                        <button class="absolute right-3 w-8 h-8 rounded-full bg-mobi-accent flex items-center justify-center text-white hover:bg-orange-600 transition">
+                            <i class="fa-solid fa-arrow-right text-sm"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="flex gap-3 items-center hidden md:flex">
+                    <button class="w-10 h-10 rounded-full bg-mobi-card flex items-center justify-center hover:bg-mobi-border transition shadow-sm border border-mobi-border">
+                        <i class="fa-regular fa-bell"></i>
+                    </button>
+                    <div class="w-10 h-10 rounded-full overflow-hidden border-2 border-mobi-accent shadow-sm">
+                        <img class="w-full h-full object-cover" src="https://storage.googleapis.com/uxpilot-auth.appspot.com/avatars/avatar-4.jpg" alt="Profile" />
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Segmented Control & Filters -->
+            <div class="flex flex-col gap-4 mt-4 pb-2">
+                <div class="flex bg-mobi-card rounded-lg p-1 border border-mobi-border w-full md:max-w-xs">
+                    <button class="flex-1 flex items-center justify-center gap-2 px-3 py-2 md:px-4 rounded-md bg-mobi-accent text-white shadow-sm transition font-medium text-sm md:text-base">
+                        <i class="fa-solid fa-magnifying-glass"></i> Browse
+                    </button>
+                    <button class="flex-1 flex items-center justify-center gap-2 px-3 py-2 md:px-4 rounded-md text-mobi-muted hover:text-white transition font-medium text-sm md:text-base">
+                        <i class="fa-solid fa-plus"></i> Sell
+                    </button>
+                </div>
+
+                <div class="flex flex-nowrap overflow-x-auto hide-scrollbar gap-3 items-center w-full" id="filters-bar">
+                    <button class="flex-shrink-0 flex items-center gap-2 bg-mobi-card rounded-full px-4 py-2 border border-mobi-border cursor-pointer hover:bg-mobi-border transition">
+                        <i class="fa-solid fa-list text-mobi-muted text-sm"></i>
+                        <span class="text-sm font-medium text-white">Category</span>
+                        <i class="fa-solid fa-chevron-down text-xs text-mobi-muted ml-1"></i>
+                    </button>
+                    <button class="flex-shrink-0 flex items-center gap-2 bg-mobi-card rounded-full px-4 py-2 border border-mobi-border cursor-pointer hover:bg-mobi-border transition">
+                        <i class="fa-solid fa-location-dot text-mobi-muted text-sm"></i>
+                        <span class="text-sm font-medium text-white">Location</span>
+                        <i class="fa-solid fa-chevron-down text-xs text-mobi-muted ml-1"></i>
+                    </button>
+                    <button class="flex-shrink-0 flex items-center gap-2 bg-mobi-card rounded-full px-4 py-2 border border-mobi-border cursor-pointer hover:bg-mobi-border transition">
+                        <i class="fa-solid fa-tag text-mobi-muted text-sm"></i>
+                        <span class="text-sm font-medium text-white">Condition</span>
+                        <i class="fa-solid fa-chevron-down text-xs text-mobi-muted ml-1"></i>
+                    </button>
+                    <button class="flex-shrink-0 flex items-center gap-2 bg-mobi-card rounded-full px-4 py-2 border border-mobi-border cursor-pointer hover:bg-mobi-border transition">
+                        <i class="fa-solid fa-dollar-sign text-mobi-muted text-sm"></i>
+                        <span class="text-sm font-medium text-white">Price</span>
+                        <i class="fa-solid fa-chevron-down text-xs text-mobi-muted ml-1"></i>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Feed -->
+        <main class="flex-1 overflow-y-auto px-4 md:px-8 pb-28 pt-6" id="classifieds-main">
+            
+            <div class="flex justify-between items-end mb-6">
+                <div>
+                    <h2 class="text-xl md:text-2xl font-bold mb-1">Recent Listings</h2>
+                    <p class="text-sm text-mobi-muted">Based on your saved searches</p>
+                </div>
+            </div>
+
+            <!-- Grid Layout for Listings -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-6" id="listings-grid">
+                
+                <!-- Listing Card 1 -->
+                <div class="bg-mobi-card rounded-xl border border-mobi-border overflow-hidden hover:border-mobi-accent transition flex flex-col cursor-pointer group shadow-sm">
+                    <div class="h-48 relative overflow-hidden bg-gray-800">
+                        <img class="w-full h-full object-cover group-hover:scale-105 transition duration-300" src="https://storage.googleapis.com/uxpilot-auth.appspot.com/210aa4cb1e-5f4ebbac54a3daf17ae5.png" alt="professional studio photo of a Fluke 87V digital multimeter, clean background, industrial tool style" />
+                        <button class="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/50 flex items-center justify-center text-white hover:bg-mobi-accent transition backdrop-blur-sm">
+                            <i class="fa-regular fa-heart"></i>
+                        </button>
+                        <div class="absolute bottom-3 left-3 bg-black/60 backdrop-blur-sm text-white text-xs px-2 py-1 rounded">
+                            Used - Like New
+                        </div>
+                    </div>
+                    <div class="p-4 flex-1 flex flex-col">
+                        <div class="flex justify-between items-start mb-2">
+                            <h3 class="font-bold text-lg text-white line-clamp-2">Fluke 87V Digital Multimeter</h3>
+                            <span class="font-bold text-mobi-accent text-lg ml-2">$250</span>
+                        </div>
+                        <div class="flex items-center gap-2 text-xs text-mobi-muted mb-3">
+                            <i class="fa-solid fa-location-dot"></i> San Jose, CA (12 mi)
+                        </div>
+                        <div class="mt-auto pt-3 border-t border-mobi-border flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <div class="w-6 h-6 rounded-full overflow-hidden bg-gray-600">
+                                    <img src="https://storage.googleapis.com/uxpilot-auth.appspot.com/avatars/avatar-1.jpg" alt="Seller" class="w-full h-full object-cover">
+                                </div>
+                                <div class="flex flex-col">
+                                    <span class="text-xs text-white">Alex R.</span>
+                                    <div class="flex items-center gap-1 text-[10px] text-mobi-warning">
+                                        <i class="fa-solid fa-star"></i> 4.9
+                                    </div>
+                                </div>
+                            </div>
+                            <span class="text-xs text-mobi-muted">2h ago</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Listing Card 2 -->
+                <div class="bg-mobi-card rounded-xl border border-mobi-border overflow-hidden hover:border-mobi-accent transition flex flex-col cursor-pointer group shadow-sm">
+                    <div class="h-48 relative overflow-hidden bg-gray-800">
+                        <img class="w-full h-full object-cover group-hover:scale-105 transition duration-300" src="https://storage.googleapis.com/uxpilot-auth.appspot.com/1cbe7c8950-da37bd468e40e6b7cba7.png" alt="Hakko FX-951 soldering station on a workbench, professional electronics repair equipment" />
+                        <button class="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/50 flex items-center justify-center text-white hover:bg-mobi-accent transition backdrop-blur-sm">
+                            <i class="fa-regular fa-heart"></i>
+                        </button>
+                        <div class="absolute bottom-3 left-3 bg-black/60 backdrop-blur-sm text-white text-xs px-2 py-1 rounded">
+                            Used - Good
+                        </div>
+                    </div>
+                    <div class="p-4 flex-1 flex flex-col">
+                        <div class="flex justify-between items-start mb-2">
+                            <h3 class="font-bold text-lg text-white line-clamp-2">Hakko FX-951 Soldering Station</h3>
+                            <span class="font-bold text-mobi-accent text-lg ml-2">$180</span>
+                        </div>
+                        <div class="flex items-center gap-2 text-xs text-mobi-muted mb-3">
+                            <i class="fa-solid fa-location-dot"></i> Fremont, CA (25 mi)
+                        </div>
+                        <div class="mt-auto pt-3 border-t border-mobi-border flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <div class="w-6 h-6 rounded-full overflow-hidden bg-gray-600">
+                                    <img src="https://storage.googleapis.com/uxpilot-auth.appspot.com/avatars/avatar-2.jpg" alt="Seller" class="w-full h-full object-cover">
+                                </div>
+                                <div class="flex flex-col">
+                                    <span class="text-xs text-white">TechPro22</span>
+                                    <div class="flex items-center gap-1 text-[10px] text-mobi-warning">
+                                        <i class="fa-solid fa-star"></i> 4.5
+                                    </div>
+                                </div>
+                            </div>
+                            <span class="text-xs text-mobi-muted">5h ago</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Create Listing CTA Card (for Sell segment context) -->
+                <div class="bg-gradient-to-br from-mobi-card to-mobi-dark rounded-xl border border-mobi-accent/50 p-6 flex flex-col items-center justify-center text-center shadow-lg sm:col-span-2 lg:col-span-1 border-dashed">
+                    <div class="w-16 h-16 rounded-full bg-mobi-accent/20 flex items-center justify-center text-mobi-accent mb-4">
+                        <i class="fa-solid fa-camera text-2xl"></i>
+                    </div>
+                    <h3 class="font-bold text-lg md:text-xl text-white mb-2">Got tools to sell?</h3>
+                    <p class="text-sm text-mobi-muted mb-6">Snap a photo and we'll auto-categorize it for you.</p>
+                    <button class="bg-mobi-accent hover:bg-orange-600 text-white font-medium py-3 px-6 rounded-lg transition w-full shadow-md">
+                        Create Listing
+                    </button>
+                </div>
+
+            </div>
+            
+        </main>
+
+        <!-- Bottom Navigation Bar -->
+        <nav class="fixed bottom-0 w-full lg:hidden glass-panel border-t border-mobi-border pb-safe pt-2 px-6 pb-6 z-30 rounded-t-3xl" id="bottom-nav">
+            <div class="flex justify-between items-center max-w-md mx-auto">
+                <a href="#" class="flex flex-col items-center gap-1 text-mobi-muted hover:text-white transition">
+                    <div class="w-12 h-8 rounded-full flex items-center justify-center">
+                        <i class="fa-solid fa-video text-lg"></i>
+                    </div>
+                    <span class="text-[10px] font-medium">Live</span>
+                </a>
+                
+                <a href="#" class="flex flex-col items-center gap-1 text-mobi-muted hover:text-white transition">
+                    <div class="w-12 h-8 rounded-full flex items-center justify-center">
+                        <i class="fa-solid fa-box-open text-lg"></i>
+                    </div>
+                    <span class="text-[10px] font-medium">Products</span>
+                </a>
+                
+                <a href="#" class="flex flex-col items-center gap-1 text-mobi-muted hover:text-white transition">
+                    <div class="w-12 h-8 rounded-full flex items-center justify-center">
+                        <i class="fa-solid fa-truck-fast text-lg"></i>
+                    </div>
+                    <span class="text-[10px] font-medium">Suppliers</span>
+                </a>
+                
+                <a href="#" class="flex flex-col items-center gap-1 text-mobi-accent">
+                    <div class="w-12 h-8 rounded-full bg-mobi-accent/20 flex items-center justify-center">
+                        <i class="fa-solid fa-handshake text-lg"></i>
+                    </div>
+                    <span class="text-[10px] font-medium">Buy & Sell</span>
+                </a>
+                
+                <a href="#" class="flex flex-col items-center gap-1 text-mobi-muted hover:text-white transition">
+                    <div class="w-12 h-8 rounded-full flex items-center justify-center">
+                        <i class="fa-solid fa-bullhorn text-lg"></i>
+                    </div>
+                    <span class="text-[10px] font-medium">Ads</span>
+                </a>
+            </div>
+        </nav>
+
+    </div>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,60 @@
+node_modules/
+.env
+.vscode/
+.DS_Store
+npm-debug.log
+.cache/
+.expo/
+dist/
+build/
+.local/
+*.db
+*.log
+*.apk
+*.aab
+
+# Secrets & local
+.env*.local
+google-services.json
+
+# Build outputs
+web-build/
+server_dist/
+static-build/
+public/
+uploads/
+attached_assets/
+*.tsbuildinfo
+.vercel
+.cursor/
+.idea/
+
+# Native
+android/
+ios/
+android-rn/
+*.pem
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+
+# Tooling / cache
+.metro-health-check*
+.yarn/
+.pnp.*
+.replit
+replit.nix
+.breakpoints
+*.tar.gz
+*.tar
+
+# Large local tooling (not app source)
+.config/
+.agents/
+.firebase/
+.tmp_eas/
+.replit_integration_files/
+.local/

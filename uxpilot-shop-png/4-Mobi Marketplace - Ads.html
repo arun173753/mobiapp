@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mobi Marketplace - Ads</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script> window.FontAwesomeConfig = { autoReplaceSvg: 'nest'};</script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.plot.ly/plotly-3.1.1.min.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        mobi: {
+                            dark: '#687494', 
+                            card: '#5C6784', 
+                            accent: '#FF7B47', 
+                            text: '#FFFFFF',
+                            muted: '#E5E7EB',
+                            border: '#4A5568',
+                            success: '#10B981',
+                            warning: '#F59E0B',
+                            danger: '#EF4444',
+                            purple: '#6C5CE7'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #687494;
+            color: #FFFFFF;
+            font-family: 'Inter', sans-serif;
+            -webkit-text-size-adjust: 100%;
+        }
+        
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #687494;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #4A5568;
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #FF7B47;
+        }
+        
+        .glass-panel {
+            background: rgba(92, 103, 132, 0.7);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .app-container {
+            width: 100%;
+            max-width: 1280px;
+            margin: 0 auto;
+            min-height: 100vh;
+            position: relative;
+            background-color: #687494;
+        }
+        
+        @media (min-width: 1024px) {
+            .app-container {
+                display: grid;
+                grid-template-columns: 240px 1fr;
+            }
+        }
+
+        .hide-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .hide-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        .toggle-checkbox:checked {
+            right: 0;
+            border-color: #FF7B47;
+        }
+        .toggle-checkbox:checked + .toggle-label {
+            background-color: #FF7B47;
+        }
+    </style>
+</head>
+<body>
+
+<div class="app-container" id="app-root">
+    
+    <!-- Desktop Sidebar -->
+    <aside class="hidden lg:flex flex-col border-r border-mobi-border p-6 sticky top-0 h-screen" id="desktop-sidebar">
+        <div class="flex items-center justify-between mb-8">
+            <h1 class="text-2xl font-bold tracking-tight">Mobi <span class="text-mobi-accent">Ads Admin</span></h1>
+        </div>
+        <nav class="space-y-4">
+            <a href="#" class="flex items-center gap-3 text-mobi-muted hover:text-white transition"><i class="fa-solid fa-video w-5"></i> Live</a>
+            <a href="#" class="flex items-center gap-3 text-mobi-muted hover:text-white transition"><i class="fa-solid fa-box-open w-5"></i> Products</a>
+            <a href="#" class="flex items-center gap-3 text-mobi-muted hover:text-white transition"><i class="fa-solid fa-truck-fast w-5"></i> Suppliers</a>
+            <a href="#" class="flex items-center gap-3 text-mobi-muted hover:text-white transition"><i class="fa-solid fa-handshake w-5"></i> Buy & Sell</a>
+            <a href="#" class="flex items-center gap-3 text-mobi-accent font-medium"><i class="fa-solid fa-bullhorn w-5"></i> Ads</a>
+        </nav>
+    </aside>
+
+    <div class="flex flex-col w-full min-h-screen relative">
+        <!-- Top Header -->
+        <header class="pt-4 md:pt-8 pb-4 px-4 md:px-8 z-20 bg-mobi-dark sticky top-0 border-b border-mobi-border/30" id="main-header">
+            <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+                <div class="flex items-center justify-between w-full md:w-auto">
+                    <h1 class="text-xl md:text-2xl lg:text-3xl font-bold tracking-tight lg:hidden">Mobi <span class="text-mobi-accent">Ads Admin</span></h1>
+                    <button class="lg:hidden text-white text-2xl p-2 hover:bg-mobi-card rounded-lg transition" aria-label="Open Menu">
+                        <i class="fa-solid fa-bars"></i>
+                    </button>
+                </div>
+                
+                <div class="flex gap-3 items-center ml-auto">
+                    <button class="flex items-center gap-2 bg-mobi-accent hover:bg-orange-600 text-white px-4 py-2 rounded-lg font-medium transition shadow-sm text-sm">
+                        <i class="fa-solid fa-plus"></i> New Campaign
+                    </button>
+                    <button class="w-10 h-10 rounded-full bg-mobi-card flex items-center justify-center hover:bg-mobi-border transition shadow-sm border border-mobi-border">
+                        <i class="fa-regular fa-bell"></i>
+                    </button>
+                    <div class="w-10 h-10 rounded-full overflow-hidden border-2 border-mobi-accent shadow-sm">
+                        <img class="w-full h-full object-cover" src="https://storage.googleapis.com/uxpilot-auth.appspot.com/avatars/avatar-4.jpg" alt="Admin Profile" />
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Segmented Control -->
+            <div class="flex flex-col gap-4 mt-2 pb-2">
+                <div class="flex bg-mobi-card rounded-lg p-1 border border-mobi-border w-full md:max-w-md">
+                    <button class="flex-1 flex items-center justify-center gap-2 px-3 py-2 md:px-4 rounded-md bg-mobi-accent text-white shadow-sm transition font-medium text-sm md:text-base">
+                        Active
+                    </button>
+                    <button class="flex-1 flex items-center justify-center gap-2 px-3 py-2 md:px-4 rounded-md text-mobi-muted hover:text-white transition font-medium text-sm md:text-base">
+                        Scheduled
+                    </button>
+                    <button class="flex-1 flex items-center justify-center gap-2 px-3 py-2 md:px-4 rounded-md text-mobi-muted hover:text-white transition font-medium text-sm md:text-base">
+                        Drafts
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="flex-1 overflow-y-auto px-4 md:px-8 pb-32 pt-6" id="ads-main">
+            
+            <!-- Overview Stats - Responsive Grid Fix -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+                <div class="bg-mobi-card rounded-xl p-4 border border-mobi-border shadow-sm">
+                    <div class="text-mobi-muted text-sm mb-1">Active Campaigns</div>
+                    <div class="text-2xl font-bold text-white">12</div>
+                    <div class="text-xs text-mobi-success mt-2 flex items-center gap-1">
+                        <i class="fa-solid fa-arrow-trend-up"></i> +2 this week
+                    </div>
+                </div>
+                <div class="bg-mobi-card rounded-xl p-4 border border-mobi-border shadow-sm">
+                    <div class="text-mobi-muted text-sm mb-1">Total Impressions</div>
+                    <div class="text-2xl font-bold text-white">45.2K</div>
+                    <div class="text-xs text-mobi-success mt-2 flex items-center gap-1">
+                        <i class="fa-solid fa-arrow-trend-up"></i> 12% vs last week
+                    </div>
+                </div>
+                <div class="bg-mobi-card rounded-xl p-4 border border-mobi-border shadow-sm">
+                    <div class="text-mobi-muted text-sm mb-1">Avg. CTR</div>
+                    <div class="text-2xl font-bold text-white">3.8%</div>
+                    <div class="text-xs text-mobi-warning mt-2 flex items-center gap-1">
+                        <i class="fa-solid fa-minus"></i> 0% vs last week
+                    </div>
+                </div>
+                <div class="bg-mobi-card rounded-xl p-4 border border-mobi-border shadow-sm">
+                    <div class="text-mobi-muted text-sm mb-1">Spend (MTD)</div>
+                    <div class="text-2xl font-bold text-white">$1,240</div>
+                    <div class="text-xs text-mobi-muted mt-2">
+                        62% of $2,000 budget
+                    </div>
+                </div>
+            </div>
+
+            <h2 class="text-xl md:text-2xl font-bold mb-4">Active Campaigns</h2>
+
+            <!-- Campaign List -->
+            <div class="space-y-6">
+                
+                <!-- Campaign Card 1 - Improved Mobile Actions -->
+                <div class="bg-mobi-card rounded-xl border border-mobi-border overflow-hidden shadow-sm flex flex-col md:flex-row">
+                    <!-- Preview Image -->
+                    <div class="w-full md:w-48 h-40 md:h-auto relative bg-gray-800 flex-shrink-0">
+                        <img class="w-full h-full object-cover" src="https://storage.googleapis.com/uxpilot-auth.appspot.com/22f6465f15-895658c45d0cdaa26e5a.png" alt="professional industrial tool advertisement banner for Fluke spring promo, clean high-tech style" />
+                        <div class="absolute top-2 left-2 bg-mobi-purple text-white text-[10px] font-bold px-2 py-1 rounded uppercase tracking-wider">
+                            Sponsored
+                        </div>
+                        <div class="absolute bottom-2 right-2 bg-black/70 text-white text-[10px] px-2 py-1 rounded backdrop-blur-sm">
+                            Banner
+                        </div>
+                    </div>
+                    
+                    <!-- Details -->
+                    <div class="p-4 md:p-6 flex-1 flex flex-col justify-between">
+                        <div>
+                            <div class="flex justify-between items-start mb-2">
+                                <h3 class="font-bold text-lg md:text-xl text-white">Fluke Spring Tool Promo</h3>
+                                <div class="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
+                                    <input type="checkbox" name="toggle" id="toggle1" checked class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer border-mobi-accent z-10 top-0 right-0"/>
+                                    <label for="toggle1" class="toggle-label block overflow-hidden h-5 rounded-full bg-mobi-accent cursor-pointer"></label>
+                                </div>
+                            </div>
+                            <p class="text-sm text-mobi-muted mb-4">Targeting: Buy & Sell Tab • Electronics Category • US/CA</p>
+                        </div>
+                        
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 border-t border-mobi-border pt-4">
+                            <div>
+                                <div class="text-[10px] text-mobi-muted uppercase">Impressions</div>
+                                <div class="font-medium text-sm">12,450</div>
+                            </div>
+                            <div>
+                                <div class="text-[10px] text-mobi-muted uppercase">Clicks</div>
+                                <div class="font-medium text-sm">523</div>
+                            </div>
+                            <div>
+                                <div class="text-[10px] text-mobi-muted uppercase">CTR</div>
+                                <div class="font-medium text-sm text-mobi-success">4.2%</div>
+                            </div>
+                            <div>
+                                <div class="text-[10px] text-mobi-muted uppercase">Budget</div>
+                                <div class="font-medium text-sm">$50 / day</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Actions - Fixed Mobile Spacing -->
+                    <div class="bg-mobi-dark/30 p-4 border-t md:border-t-0 md:border-l border-mobi-border flex flex-row md:flex-col justify-stretch md:justify-center gap-3 min-w-[140px]">
+                        <button class="flex-1 md:flex-none py-3 md:py-2 px-4 bg-mobi-card hover:bg-mobi-border rounded-lg border border-mobi-border text-sm font-semibold transition text-center w-full">
+                            <i class="fa-solid fa-pen-to-square mr-2 md:hidden"></i>Edit
+                        </button>
+                        <button class="flex-1 md:flex-none py-3 md:py-2 px-4 bg-mobi-card hover:bg-mobi-border rounded-lg border border-mobi-border text-sm font-semibold transition text-center w-full">
+                            <i class="fa-solid fa-chart-line mr-2 md:hidden"></i>Report
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Campaign Card 2 - Improved Mobile Actions -->
+                <div class="bg-mobi-card rounded-xl border border-mobi-border overflow-hidden shadow-sm flex flex-col md:flex-row">
+                    <div class="w-full md:w-48 h-40 md:h-auto relative bg-gray-800 flex-shrink-0">
+                        <img class="w-full h-full object-cover" src="https://storage.googleapis.com/uxpilot-auth.appspot.com/dfedcfd067-fe32881c72f961e46d94.png" alt="professional soldering station product photography for advertising, modern electronics lab style" />
+                        <div class="absolute top-2 left-2 bg-mobi-purple text-white text-[10px] font-bold px-2 py-1 rounded uppercase tracking-wider">
+                            Sponsored
+                        </div>
+                        <div class="absolute bottom-2 right-2 bg-black/70 text-white text-[10px] px-2 py-1 rounded backdrop-blur-sm">
+                            Interstitial
+                        </div>
+                    </div>
+                    
+                    <div class="p-4 md:p-6 flex-1 flex flex-col justify-between">
+                        <div>
+                            <div class="flex justify-between items-start mb-2">
+                                <h3 class="font-bold text-lg md:text-xl text-white">Pro Soldering Station Launch</h3>
+                                <div class="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
+                                    <input type="checkbox" name="toggle" id="toggle2" checked class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer border-mobi-accent z-10 top-0 right-0"/>
+                                    <label for="toggle2" class="toggle-label block overflow-hidden h-5 rounded-full bg-mobi-accent cursor-pointer"></label>
+                                </div>
+                            </div>
+                            <p class="text-sm text-mobi-muted mb-4">Targeting: Live Sessions • Interstitial • Global</p>
+                        </div>
+                        
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 border-t border-mobi-border pt-4">
+                            <div>
+                                <div class="text-[10px] text-mobi-muted uppercase">Impressions</div>
+                                <div class="font-medium text-sm">8,920</div>
+                            </div>
+                            <div>
+                                <div class="text-[10px] text-mobi-muted uppercase">Clicks</div>
+                                <div class="font-medium text-sm">214</div>
+                            </div>
+                            <div>
+                                <div class="text-[10px] text-mobi-muted uppercase">CTR</div>
+                                <div class="font-medium text-sm text-mobi-warning">2.4%</div>
+                            </div>
+                            <div>
+                                <div class="text-[10px] text-mobi-muted uppercase">Budget</div>
+                                <div class="font-medium text-sm">$100 / day</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="bg-mobi-dark/30 p-4 border-t md:border-t-0 md:border-l border-mobi-border flex flex-row md:flex-col justify-stretch md:justify-center gap-3 min-w-[140px]">
+                        <button class="flex-1 md:flex-none py-3 md:py-2 px-4 bg-mobi-card hover:bg-mobi-border rounded-lg border border-mobi-border text-sm font-semibold transition text-center w-full">
+                            <i class="fa-solid fa-pen-to-square mr-2 md:hidden"></i>Edit
+                        </button>
+                        <button class="flex-1 md:flex-none py-3 md:py-2 px-4 bg-mobi-card hover:bg-mobi-border rounded-lg border border-mobi-border text-sm font-semibold transition text-center w-full">
+                            <i class="fa-solid fa-chart-line mr-2 md:hidden"></i>Report
+                        </button>
+                    </div>
+                </div>
+
+            </div>
+            
+        </main>
+
+        <!-- Bottom Navigation Bar (Mobile) -->
+        <nav class="fixed bottom-0 w-full lg:hidden glass-panel border-t border-mobi-border pb-safe pt-2 px-6 pb-6 z-30 rounded-t-3xl" id="bottom-nav">
+            <div class="flex justify-between items-center max-w-md mx-auto">
+                <a href="#" class="flex flex-col items-center gap-1 text-mobi-muted hover:text-white transition">
+                    <div class="w-12 h-8 rounded-full flex items-center justify-center">
+                        <i class="fa-solid fa-video text-lg"></i>
+                    </div>
+                    <span class="text-[10px] font-medium">Live</span>
+                </a>
+                
+                <a href="#" class="flex flex-col items-center gap-1 text-mobi-muted hover:text-white transition">
+                    <div class="w-12 h-8 rounded-full flex items-center justify-center">
+                        <i class="fa-solid fa-box-open text-lg"></i>
+                    </div>
+                    <span class="text-[10px] font-medium">Products</span>
+                </a>
+                
+                <a href="#" class="flex flex-col items-center gap-1 text-mobi-muted hover:text-white transition">
+                    <div class="w-12 h-8 rounded-full flex items-center justify-center">
+                        <i class="fa-solid fa-truck-fast text-lg"></i>
+                    </div>
+                    <span class="text-[10px] font-medium">Suppliers</span>
+                </a>
+                
+                <a href="#" class="flex flex-col items-center gap-1 text-mobi-muted hover:text-white transition">
+                    <div class="w-12 h-8 rounded-full flex items-center justify-center">
+                        <i class="fa-solid fa-handshake text-lg"></i>
+                    </div>
+                    <span class="text-[10px] font-medium">Buy & Sell</span>
+                </a>
+                
+                <a href="#" class="flex flex-col items-center gap-1 text-mobi-accent">
+                    <div class="w-12 h-8 rounded-full bg-mobi-accent/20 flex items-center justify-center">
+                        <i class="fa-solid fa-bullhorn text-lg"></i>
+                    </div>
+                    <span class="text-[10px] font-medium">Ads</span>
+                </a>
+            </div>
+        </nav>
+
+    </div>
+</div>
+
+</body>
+</html>

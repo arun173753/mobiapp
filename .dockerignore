@@ -1,0 +1,15 @@
+node_modules
+.git
+.expo
+.metro-cache
+dist
+*.md
+.local
+attached_assets
+# Root-only (leading slash): keep server/lib, server/templates, etc.
+/app/
+/components/
+/constants/
+/hooks/
+/lib/
+/references/

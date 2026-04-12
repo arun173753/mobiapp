@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mobi Marketplace - Products</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script> window.FontAwesomeConfig = { autoReplaceSvg: 'nest'};</script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/js/all.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        mobi: {
+                            dark: '#687494', 
+                            card: '#5C6784', 
+                            accent: '#FF7B47', 
+                            text: '#FFFFFF',
+                            muted: '#E5E7EB', // Improved contrast from D1D5DB for accessibility
+                            border: '#4A5568'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #687494;
+            color: #FFFFFF;
+            font-family: 'Inter', sans-serif;
+            -webkit-text-size-adjust: 100%;
+        }
+        
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #687494;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #4A5568;
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #FF7B47;
+        }
+        
+        .glass-panel {
+            background: rgba(92, 103, 132, 0.7);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .gradient-bg {
+            background: linear-gradient(135deg, rgba(255, 123, 71, 0.15) 0%, rgba(104, 116, 148, 0) 100%);
+        }
+        
+        .app-container {
+            width: 100%;
+            max-width: 1280px;
+            margin: 0 auto;
+            min-height: 100vh;
+            position: relative;
+            background-color: #687494;
+        }
+        
+        @media (min-width: 1024px) {
+            .app-container {
+                display: grid;
+                grid-template-columns: 240px 1fr;
+            }
+        }
+
+        .hide-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .hide-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+<body>
+
+<div class="app-container" id="app-root">
+    
+    <!-- Desktop Sidebar -->
+    <aside class="hidden lg:flex flex-col border-r border-mobi-border p-6 sticky top-0 h-screen" id="desktop-sidebar">
+        <div class="flex items-center justify-between mb-8">
+            <h1 class="text-2xl font-bold tracking-tight">Mobi <span class="text-mobi-accent">Products</span></h1>
+        </div>
+        <nav class="space-y-4">
+            <a href="#" class="flex items-center gap-3 text-mobi-muted hover:text-white transition"><i class="fa-solid fa-video w-5"></i> Live</a>
+            <a href="#" class="flex items-center gap-3 text-mobi-accent font-medium"><i class="fa-solid fa-box-open w-5"></i> Products</a>
+            <a href="#" class="flex items-center gap-3 text-mobi-muted hover:text-white transition"><i class="fa-solid fa-truck-fast w-5"></i> Suppliers</a>
+            <a href="#" class="flex items-center gap-3 text-mobi-muted hover:text-white transition"><i class="fa-solid fa-handshake w-5"></i> Buy & Sell</a>
+        </nav>
+    </aside>
+
+    <div class="flex flex-col w-full min-h-screen relative">
+        <!-- Top Header & Search -->
+        <header class="pt-4 md:pt-8 pb-4 px-4 md:px-8 z-20 bg-mobi-dark sticky top-0 border-b border-mobi-border/30" id="main-header">
+            <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+                <div class="flex items-center justify-between w-full md:w-auto">
+                    <h1 class="text-xl md:text-2xl font-bold tracking-tight lg:hidden">Mobi <span class="text-mobi-accent">Products</span></h1>
+                    <button class="lg:hidden text-white text-2xl" aria-label="Open Menu">
+                        <i class="fa-solid fa-bars"></i>
+                    </button>
+                </div>
+                <div class="flex-1 max-w-2xl w-full">
+                    <div class="relative flex items-center">
+                        <i class="fa-solid fa-search absolute left-4 text-mobi-muted"></i>
+                        <input type="text" placeholder="Search spare parts, tools, brands..." class="w-full bg-mobi-card text-white rounded-full py-3 pl-11 pr-12 focus:outline-none border border-mobi-border shadow-sm">
+                        <button class="absolute right-3 w-8 h-8 rounded-full bg-mobi-accent flex items-center justify-center text-white hover:bg-orange-600 transition">
+                            <i class="fa-solid fa-arrow-right text-sm"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="flex gap-3 items-center hidden md:flex">
+                    <button class="w-10 h-10 rounded-full bg-mobi-card flex items-center justify-center hover:bg-mobi-border transition shadow-sm border border-mobi-border">
+                        <i class="fa-regular fa-bell"></i>
+                    </button>
+                    <div class="w-10 h-10 rounded-full overflow-hidden border-2 border-mobi-accent shadow-sm">
+                        <img class="w-full h-full object-cover" src="https://storage.googleapis.com/uxpilot-auth.appspot.com/avatars/avatar-4.jpg" alt="Profile" />
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Filters Bar -->
+            <div class="flex flex-nowrap overflow-x-auto hide-scrollbar gap-3 items-center mt-4 pb-2" id="filters-bar">
+                <button aria-haspopup="true" aria-expanded="false" class="flex-shrink-0 flex items-center gap-2 bg-mobi-card rounded-full px-4 py-2 border border-mobi-border cursor-pointer hover:bg-mobi-border transition">
+                    <i class="fa-solid fa-car text-mobi-muted text-sm"></i>
+                    <span class="text-sm font-medium text-white">Vehicle</span>
+                    <i class="fa-solid fa-chevron-down text-xs text-mobi-muted ml-1"></i>
+                </button>
+                
+                <button aria-haspopup="true" aria-expanded="false" class="flex-shrink-0 flex items-center gap-2 bg-mobi-card rounded-full px-4 py-2 border border-mobi-border cursor-pointer hover:bg-mobi-border transition">
+                    <i class="fa-solid fa-tag text-mobi-muted text-sm"></i>
+                    <span class="text-sm font-medium text-white">Condition</span>
+                    <i class="fa-solid fa-chevron-down text-xs text-mobi-muted ml-1"></i>
+                </button>
+
+                <button aria-haspopup="true" aria-expanded="false" class="flex-shrink-0 flex items-center gap-2 bg-mobi-card rounded-full px-4 py-2 border border-mobi-border cursor-pointer hover:bg-mobi-border transition">
+                    <i class="fa-solid fa-dollar-sign text-mobi-muted text-sm"></i>
+                    <span class="text-sm font-medium text-white">Price</span>
+                    <i class="fa-solid fa-chevron-down text-xs text-mobi-muted ml-1"></i>
+                </button>
+
+                <button aria-haspopup="true" aria-expanded="false" class="flex-shrink-0 ml-auto flex items-center gap-2 bg-mobi-card rounded-full px-4 py-2 border border-mobi-border cursor-pointer hover:bg-mobi-border transition">
+                    <i class="fa-solid fa-sort text-mobi-muted text-sm"></i>
+                    <span class="text-sm font-medium text-white">Sort</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Product Grid -->
+        <main class="flex-1 overflow-y-auto px-4 md:px-8 pb-28 pt-6" id="product-main">
+            
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-end mb-6 gap-4">
+                <div>
+                    <h2 class="text-2xl md:text-3xl font-bold mb-1">Professional Tools & Parts</h2>
+                    <p class="text-sm text-mobi-muted">2,451 items found</p>
+                </div>
+                <div class="hidden sm:flex gap-2">
+                    <button class="w-10 h-10 rounded-lg bg-mobi-accent text-white flex items-center justify-center"><i class="fa-solid fa-grid-2"></i></button>
+                    <button class="w-10 h-10 rounded-lg bg-mobi-card text-mobi-muted border border-mobi-border flex items-center justify-center"><i class="fa-solid fa-list"></i></button>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6" id="product-grid">
+                
+                <!-- Product Card 1 -->
+                <div class="bg-mobi-card rounded-2xl overflow-hidden border border-mobi-border group hover:border-mobi-accent transition-colors duration-300 flex flex-col h-full shadow-lg relative">
+                    <button class="absolute top-3 right-3 w-8 h-8 rounded-full bg-mobi-dark/50 backdrop-blur-sm flex items-center justify-center text-white hover:text-red-500 z-10 transition">
+                        <i class="fa-regular fa-heart"></i>
+                    </button>
+                    <div class="aspect-square bg-white relative p-4 flex items-center justify-center">
+                        <img class="object-contain w-full h-full transition-transform group-hover:scale-105 duration-300" src="https://storage.googleapis.com/uxpilot-auth.appspot.com/9aceedb33f-609b1ccccf959a401159.png" alt="Professional Fluke digital multimeter, high-quality product photography, white background" />
+                        <div class="absolute bottom-2 left-2 bg-green-500 text-white text-[10px] font-bold px-2 py-1 rounded uppercase tracking-wider">New</div>
+                    </div>
+                    <div class="p-4 flex flex-col flex-1">
+                        <div class="flex justify-between items-start mb-1">
+                            <span class="text-xs text-mobi-muted font-medium">Fluke</span>
+                            <div class="flex items-center gap-1 text-yellow-400 text-xs">
+                                <i class="fa-solid fa-star"></i>
+                                <span class="text-white">4.9</span>
+                                <span class="text-mobi-muted">(128)</span>
+                            </div>
+                        </div>
+                        <h3 class="font-semibold text-white text-base leading-tight mb-1 line-clamp-2">Fluke 101 Digital Multimeter Pocket Size</h3>
+                        <p class="text-xs text-mobi-muted mb-3 font-mono">PN: FLK-101</p>
+                        
+                        <div class="mt-auto flex items-end justify-between">
+                            <div>
+                                <p class="text-xl font-bold text-mobi-accent">$45.00</p>
+                                <p class="text-xs text-green-400 mt-0.5"><i class="fa-solid fa-check-circle mr-1"></i>In Stock (12)</p>
+                            </div>
+                            <button class="w-10 h-10 rounded-full bg-mobi-accent text-white flex items-center justify-center hover:bg-orange-600 transition shadow-md">
+                                <i class="fa-solid fa-cart-plus"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Product Card 2 -->
+                <div class="bg-mobi-card rounded-2xl overflow-hidden border border-mobi-border group hover:border-mobi-accent transition-colors duration-300 flex flex-col h-full shadow-lg relative">
+                    <button class="absolute top-3 right-3 w-8 h-8 rounded-full bg-mobi-dark/50 backdrop-blur-sm flex items-center justify-center text-white hover:text-red-500 z-10 transition">
+                        <i class="fa-regular fa-heart"></i>
+                    </button>
+                    <div class="aspect-square bg-white relative p-4 flex items-center justify-center">
+                        <img class="object-contain w-full h-full transition-transform group-hover:scale-105 duration-300" src="https://storage.googleapis.com/uxpilot-auth.appspot.com/87f7d0661b-f644e08848019f289073.png" alt="Hakko digital soldering station, professional electronics repair tool, white background" />
+                        <div class="absolute bottom-2 left-2 bg-blue-500 text-white text-[10px] font-bold px-2 py-1 rounded uppercase tracking-wider">Refurbished</div>
+                    </div>
+                    <div class="p-4 flex flex-col flex-1">
+                        <div class="flex justify-between items-start mb-1">
+                            <span class="text-xs text-mobi-muted font-medium">Hakko</span>
+                            <div class="flex items-center gap-1 text-yellow-400 text-xs">
+                                <i class="fa-solid fa-star"></i>
+                                <span class="text-white">4.8</span>
+                                <span class="text-mobi-muted">(84)</span>
+                            </div>
+                        </div>
+                        <h3 class="font-semibold text-white text-base leading-tight mb-1 line-clamp-2">FX-888D Digital Soldering Station</h3>
+                        <p class="text-xs text-mobi-muted mb-3 font-mono">PN: FX888D-23BY</p>
+                        
+                        <div class="mt-auto flex items-end justify-between">
+                            <div>
+                                <p class="text-xl font-bold text-mobi-accent">$89.99</p>
+                                <p class="text-xs text-green-400 mt-0.5"><i class="fa-solid fa-check-circle mr-1"></i>In Stock (4)</p>
+                            </div>
+                            <button class="w-10 h-10 rounded-full bg-mobi-accent text-white flex items-center justify-center hover:bg-orange-600 transition shadow-md">
+                                <i class="fa-solid fa-cart-plus"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Product Card 3 -->
+                <div class="bg-mobi-card rounded-2xl overflow-hidden border border-mobi-border group hover:border-mobi-accent transition-colors duration-300 flex flex-col h-full shadow-lg relative">
+                    <button class="absolute top-3 right-3 w-8 h-8 rounded-full bg-mobi-dark/50 backdrop-blur-sm flex items-center justify-center text-red-500 z-10 transition">
+                        <i class="fa-solid fa-heart"></i>
+                    </button>
+                    <div class="aspect-square bg-white relative p-4 flex items-center justify-center">
+                        <img src="https://images.unsplash.com/photo-1590845947698-8924d7409b56?ixlib=rb-4.0.3&auto=format&fit=crop&w=500&q=80" alt="Microscope" class="object-contain w-full h-full mix-blend-multiply transition-transform group-hover:scale-105 duration-300">
+                        <div class="absolute bottom-2 left-2 bg-green-500 text-white text-[10px] font-bold px-2 py-1 rounded uppercase tracking-wider">New</div>
+                    </div>
+                    <div class="p-4 flex flex-col flex-1">
+                        <div class="flex justify-between items-start mb-1">
+                            <span class="text-xs text-mobi-muted font-medium">AmScope</span>
+                            <div class="flex items-center gap-1 text-yellow-400 text-xs">
+                                <i class="fa-solid fa-star"></i>
+                                <span class="text-white">4.7</span>
+                                <span class="text-mobi-muted">(215)</span>
+                            </div>
+                        </div>
+                        <h3 class="font-semibold text-white text-base leading-tight mb-1 line-clamp-2">7X-45X Trinocular Stereo Zoom Microscope</h3>
+                        <p class="text-xs text-mobi-muted mb-3 font-mono">PN: SM-4TP</p>
+                        
+                        <div class="mt-auto flex items-end justify-between">
+                            <div>
+                                <p class="text-xl font-bold text-mobi-accent">$420.00</p>
+                                <p class="text-xs text-red-400 mt-0.5"><i class="fa-solid fa-clock mr-1"></i>Low Stock (2)</p>
+                            </div>
+                            <button class="w-10 h-10 rounded-full bg-mobi-accent text-white flex items-center justify-center hover:bg-orange-600 transition shadow-md">
+                                <i class="fa-solid fa-cart-plus"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Product Card 4 -->
+                <div class="bg-mobi-card rounded-2xl overflow-hidden border border-mobi-border group hover:border-mobi-accent transition-colors duration-300 flex flex-col h-full shadow-lg relative opacity-75">
+                    <button class="absolute top-3 right-3 w-8 h-8 rounded-full bg-mobi-dark/50 backdrop-blur-sm flex items-center justify-center text-white hover:text-red-500 z-10 transition">
+                        <i class="fa-regular fa-heart"></i>
+                    </button>
+                    <div class="aspect-square bg-white relative p-4 flex items-center justify-center">
+                        <img src="https://images.unsplash.com/photo-1517404215738-15263e9f9178?ixlib=rb-4.0.3&auto=format&fit=crop&w=500&q=80" alt="Logic Board" class="object-contain w-full h-full mix-blend-multiply transition-transform group-hover:scale-105 duration-300 grayscale">
+                        <div class="absolute bottom-2 left-2 bg-gray-600 text-white text-[10px] font-bold px-2 py-1 rounded uppercase tracking-wider">Used</div>
+                        <div class="absolute inset-0 bg-black/20 flex items-center justify-center">
+                            <span class="bg-black/80 text-white px-3 py-1 rounded font-bold text-sm">OUT OF STOCK</span>
+                        </div>
+                    </div>
+                    <div class="p-4 flex flex-col flex-1">
+                        <div class="flex justify-between items-start mb-1">
+                            <span class="text-xs text-mobi-muted font-medium">OEM</span>
+                            <div class="flex items-center gap-1 text-yellow-400 text-xs">
+                                <i class="fa-solid fa-star"></i>
+                                <span class="text-white">4.5</span>
+                                <span class="text-mobi-muted">(12)</span>
+                            </div>
+                        </div>
+                        <h3 class="font-semibold text-white text-base leading-tight mb-1 line-clamp-2">iPhone 13 Pro Max Logic Board 256GB Unlocked</h3>
+                        <p class="text-xs text-mobi-muted mb-3 font-mono">PN: 820-02382</p>
+                        
+                        <div class="mt-auto flex items-end justify-between">
+                            <div>
+                                <p class="text-xl font-bold text-mobi-muted">$250.00</p>
+                                <p class="text-xs text-gray-400 mt-0.5"><i class="fa-solid fa-bell mr-1"></i>Notify Me</p>
+                            </div>
+                            <button class="w-10 h-10 rounded-full bg-mobi-border text-white flex items-center justify-center hover:bg-gray-600 transition shadow-md">
+                                <i class="fa-regular fa-bell"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+            
+            <!-- Pagination -->
+            <div class="flex justify-center mt-10 mb-8" id="pagination">
+                <div class="flex gap-2">
+                    <button class="w-10 h-10 rounded-lg bg-mobi-card border border-mobi-border flex items-center justify-center text-mobi-muted hover:text-white hover:border-mobi-accent transition"><i class="fa-solid fa-chevron-left"></i></button>
+                    <button class="w-10 h-10 rounded-lg bg-mobi-accent text-white font-bold flex items-center justify-center shadow-md">1</button>
+                    <button class="w-10 h-10 rounded-lg bg-mobi-card border border-mobi-border flex items-center justify-center text-white hover:border-mobi-accent transition">2</button>
+                    <button class="w-10 h-10 rounded-lg bg-mobi-card border border-mobi-border flex items-center justify-center text-white hover:border-mobi-accent transition">3</button>
+                    <span class="w-10 h-10 flex items-center justify-center text-mobi-muted">...</span>
+                    <button class="w-10 h-10 rounded-lg bg-mobi-card border border-mobi-border flex items-center justify-center text-white hover:border-mobi-accent transition">12</button>
+                    <button class="w-10 h-10 rounded-lg bg-mobi-card border border-mobi-border flex items-center justify-center text-mobi-muted hover:text-white hover:border-mobi-accent transition"><i class="fa-solid fa-chevron-right"></i></button>
+                </div>
+            </div>
+
+        </main>
+
+        <!-- Bottom Navigation Bar (Consistent with Live screen) -->
+        <nav class="fixed bottom-0 w-full lg:hidden glass-panel border-t border-mobi-border pb-safe pt-2 px-6 pb-6 z-30 rounded-t-3xl" id="bottom-nav">
+            <div class="flex justify-between items-center max-w-md mx-auto">
+                <a href="#" class="flex flex-col items-center gap-1 text-mobi-muted hover:text-white transition">
+                    <div class="w-12 h-8 rounded-full flex items-center justify-center">
+                        <i class="fa-solid fa-video text-lg"></i>
+                    </div>
+                    <span class="text-[10px] font-medium">Live</span>
+                </a>
+                
+                <a href="#" class="flex flex-col items-center gap-1 text-mobi-accent">
+                    <div class="w-12 h-8 rounded-full bg-mobi-accent/20 flex items-center justify-center">
+                        <i class="fa-solid fa-box-open text-lg"></i>
+                    </div>
+                    <span class="text-[10px] font-medium">Products</span>
+                </a>
+                
+                <a href="#" class="flex flex-col items-center gap-1 text-mobi-muted hover:text-white transition">
+                    <div class="w-12 h-8 rounded-full flex items-center justify-center">
+                        <i class="fa-solid fa-truck-fast text-lg"></i>
+                    </div>
+                    <span class="text-[10px] font-medium">Suppliers</span>
+                </a>
+                
+                <a href="#" class="flex flex-col items-center gap-1 text-mobi-muted hover:text-white transition">
+                    <div class="w-12 h-8 rounded-full flex items-center justify-center">
+                        <i class="fa-solid fa-handshake text-lg"></i>
+                    </div>
+                    <span class="text-[10px] font-medium">Buy & Sell</span>
+                </a>
+                
+                <a href="#" class="flex flex-col items-center gap-1 text-mobi-muted hover:text-white transition">
+                    <div class="w-12 h-8 rounded-full flex items-center justify-center">
+                        <i class="fa-solid fa-bullhorn text-lg"></i>
+                    </div>
+                    <span class="text-[10px] font-medium">Ads</span>
+                </a>
+            </div>
+        </nav>
+
+    </div>
+</div>
+
+</body>
+</html>
