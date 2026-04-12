@@ -20,6 +20,8 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      CLOUDSDK_CORE_DISABLE_PROMPTS: 1
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -36,7 +38,11 @@ jobs:
 
       # Dockerfile lives under ./mobiapp; tag matches Cloud Run image.
       - name: Build and push image
-        run: gcloud builds submit ./mobiapp --tag ${{ env.IMAGE }} --project ${{ env.PROJECT_ID }}
+        run: |
+          gcloud builds submit ./mobiapp \
+            --tag ${{ env.IMAGE }} \
+            --project ${{ env.PROJECT_ID }} \
+            --quiet
 
       - name: Deploy to Cloud Run
         run: |
@@ -45,7 +51,8 @@ jobs:
             --region ${{ env.REGION }} \
             --platform managed \
             --allow-unauthenticated \
-            --project ${{ env.PROJECT_ID }}
+            --project ${{ env.PROJECT_ID }} \
+            --quiet
 
       - name: Print Cloud Run service URL
         run: |
