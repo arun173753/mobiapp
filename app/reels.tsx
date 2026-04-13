@@ -7,7 +7,7 @@ import {
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useVideoPlayer, VideoView } from 'expo-video';
+import { useVideoPlayer, VideoView, type VideoPlayer } from 'expo-video';
 import { isBunnyUrl, getBunnyEmbedUrl, resolveBunnyPlaybackUrl, getBunnyVideoId } from '@/lib/bunny-cdn';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import Animated, {
@@ -24,6 +24,17 @@ import { Reel, Comment, UserRole } from '@/lib/types';
 const C = Colors.light;
 const { width: SW, height: SH } = Dimensions.get('window');
 const SNAP_HEIGHT = Platform.OS === 'web' ? '100vh' : SH;
+
+/** Inline — used before StyleSheet `s` (ReelVideoWithHook mounts above `s` in source). */
+const REEL_VIDEO_LAYER_STYLE = StyleSheet.create({
+  video: {
+    width: '100%',
+    height: '100%',
+    position: 'absolute',
+    top: 0,
+    left: 0,
+  },
+}).video;
 
 const sessionViewedReels = new Set<string>();
 
@@ -165,6 +176,46 @@ function CommentsModal({
   );
 }
 
+/** Single mounted instance per visible reel — avoids N native decoders in FlatList (OOM crashes). */
+function ReelVideoWithHook({
+  videoSource,
+  isActive,
+  muted,
+  onPlayer,
+}: {
+  videoSource: string;
+  isActive: boolean;
+  muted: boolean;
+  onPlayer: (p: VideoPlayer | null) => void;
+}) {
+  const player = useVideoPlayer(videoSource, (p) => {
+    p.loop = true;
+    p.volume = 1;
+  });
+
+  useEffect(() => {
+    onPlayer(player);
+    return () => {
+      onPlayer(null);
+    };
+  }, [player, onPlayer]);
+
+  useEffect(() => {
+    if (isActive) {
+      player.play();
+    } else {
+      player.pause();
+      player.currentTime = 0;
+    }
+  }, [isActive, player]);
+
+  useEffect(() => {
+    player.muted = muted;
+  }, [muted, player]);
+
+  return <VideoView player={player} style={REEL_VIDEO_LAYER_STYLE} contentFit="cover" nativeControls={false} />;
+}
+
 function ReelItem({ reel, isActive, currentUserId, onLike, onDelete, onOpenComments, onView }: {
   reel: Reel;
   isActive: boolean;
@@ -200,28 +251,32 @@ function ReelItem({ reel, isActive, currentUserId, onLike, onDelete, onOpenComme
 
   const useIframe = Platform.OS === 'web' && !!bunnyEmbedUrl;
 
-  const player = useVideoPlayer(useIframe ? '' : videoSource, (p) => {
-    p.loop = true;
-    p.volume = 1;
-  });
+  const playerRef = useRef<VideoPlayer | null>(null);
+  const onPlayer = useCallback((p: VideoPlayer | null) => {
+    playerRef.current = p;
+  }, []);
+  const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+  }, []);
+
   const [isPlaying, setIsPlaying] = useState(true);
 
   useEffect(() => {
-    if (useIframe) return;
-    if (isActive) {
-      player.play();
-      setIsPlaying(true);
-    } else {
-      player.pause();
-      player.currentTime = 0;
-      setIsPlaying(false);
-    }
-  }, [isActive, player, useIframe]);
+    if (Platform.OS === 'web' && !isActive) setIsPlaying(false);
+    if (Platform.OS === 'web' && isActive) setIsPlaying(true);
+  }, [isActive]);
 
-  useEffect(() => {
-    if (useIframe) return;
-    player.muted = muted;
-  }, [muted, player, useIframe]);
+  const thumbUri =
+    reel.thumbnailUrl &&
+    (reel.thumbnailUrl.startsWith('http') || reel.thumbnailUrl.includes('b-cdn.net'))
+      ? reel.thumbnailUrl
+      : reel.thumbnailUrl
+        ? `${baseUrl}${reel.thumbnailUrl}`
+        : null;
+
+  const showVideoLayer = !useIframe && (isActive || Platform.OS === 'web');
 
   const triggerDoubleTapLike = () => {
     if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -257,17 +312,19 @@ function ReelItem({ reel, isActive, currentUserId, onLike, onDelete, onOpenComme
       triggerDoubleTapLike();
     } else {
       lastTap.current = now;
-      setTimeout(() => {
+      if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+      tapTimerRef.current = setTimeout(() => {
         if (lastTap.current !== 0) {
           lastTap.current = 0;
           runOnJS(() => {
             if (useIframe) return;
-            if (isPlaying) {
-              player.pause();
-            } else {
-              player.play();
-            }
-            setIsPlaying(prev => !prev);
+            const p = playerRef.current;
+            if (!p) return;
+            setIsPlaying((prev) => {
+              if (prev) p.pause();
+              else p.play();
+              return !prev;
+            });
             showPauseIcon();
           })();
         }
@@ -315,8 +372,21 @@ function ReelItem({ reel, isActive, currentUserId, onLike, onDelete, onOpenComme
           allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
           allowFullScreen
         />
+      ) : showVideoLayer ? (
+        <ReelVideoWithHook
+          videoSource={videoSource}
+          isActive={Platform.OS === 'web' ? isActive : true}
+          muted={muted}
+          onPlayer={onPlayer}
+        />
       ) : (
-        <VideoView player={player} style={s.video} contentFit="cover" nativeControls={false} />
+        <View style={s.video}>
+          {thumbUri ? (
+            <Image source={{ uri: thumbUri }} style={StyleSheet.absoluteFillObject} contentFit="cover" />
+          ) : (
+            <View style={{ flex: 1, backgroundColor: '#0a0a0a' }} />
+          )}
+        </View>
       )}
 
       <Pressable
@@ -522,6 +592,10 @@ export default function ReelsScreen() {
         onViewableItemsChanged={onViewableItemsChanged}
         viewabilityConfig={viewabilityConfig}
         getItemLayout={(_, index) => ({ length: SH, offset: SH * index, index })}
+        windowSize={3}
+        maxToRenderPerBatch={2}
+        initialNumToRender={2}
+        removeClippedSubviews={Platform.OS === 'android'}
       />
 
       {(profile?.role === 'teacher' || profile?.role === 'supplier' || profile?.role === 'technician' || profile?.role === 'shopkeeper') && (
@@ -1019,6 +1093,10 @@ export function ReelsFeedInline({ initialReelId: initialReelIdProp }: { initialR
         onViewableItemsChanged={onViewableItemsChanged}
         viewabilityConfig={viewabilityConfig}
         getItemLayout={(_, index) => ({ length: SH, offset: SH * index, index })}
+        windowSize={3}
+        maxToRenderPerBatch={2}
+        initialNumToRender={2}
+        removeClippedSubviews={Platform.OS === 'android'}
       />
 
       {(profile?.role === 'teacher' || profile?.role === 'supplier' || profile?.role === 'technician') && (

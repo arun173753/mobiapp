@@ -2,6 +2,7 @@ import { fetch as _expoFetch } from "expo/fetch";
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
+import { DEFAULT_PRODUCTION_API_ORIGIN, normalizeApiOrigin } from "@/lib/api-base";
 
 // On web use native browser fetch so custom headers (x-session-token) are
 // always sent reliably. expo/fetch on deployed web builds can silently drop them.
@@ -11,16 +12,10 @@ const fetch: typeof _expoFetch = Platform.OS === "web" && typeof globalThis.fetc
 
 const SESSION_KEY = "mobi_session_token_v2";
 
-function normalizeApiBase(raw: string | undefined): string {
-  if (!raw?.trim()) return "";
-  const u = raw.trim();
-  return u.endsWith("/") ? u.slice(0, -1) : u;
-}
-
 export function getApiUrl(): string {
   const fromEnv =
-    normalizeApiBase(process.env.EXPO_PUBLIC_API_URL) ||
-    normalizeApiBase(process.env.EXPO_PUBLIC_DOMAIN);
+    normalizeApiOrigin(process.env.EXPO_PUBLIC_API_URL) ||
+    normalizeApiOrigin(process.env.EXPO_PUBLIC_DOMAIN);
   if (fromEnv) {
     if (typeof __DEV__ !== "undefined" && __DEV__) {
       console.log("[getApiUrl] Using EXPO_PUBLIC_API_URL / EXPO_PUBLIC_DOMAIN");
@@ -31,8 +26,10 @@ export function getApiUrl(): string {
     console.warn(
       "[getApiUrl] Set EXPO_PUBLIC_API_URL (or EXPO_PUBLIC_DOMAIN) in .env — defaulting to localhost:5000",
     );
+    return "http://127.0.0.1:5000";
   }
-  return "http://127.0.0.1:5000";
+  // Release APK/AAB: never use localhost (breaks leads, reels, auth)
+  return DEFAULT_PRODUCTION_API_ORIGIN;
 }
 
 async function getSessionToken(): Promise<string | null> {

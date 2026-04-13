@@ -9,6 +9,9 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://repair-backendarun-838751841074.asia-south1.run.app"
       }
     },
     "preview": {
@@ -17,7 +20,8 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_DOMAIN": "repair-backendarun-838751841074.asia-south1.run.app"
+        "EXPO_PUBLIC_API_URL": "https://repair-backendarun-838751841074.asia-south1.run.app",
+        "EXPO_PUBLIC_DOMAIN": "https://repair-backendarun-838751841074.asia-south1.run.app"
       }
     },
     "production": {
@@ -26,7 +30,8 @@
         "buildType": "app-bundle"
       },
       "env": {
-        "EXPO_PUBLIC_DOMAIN": "repair-backendarun-838751841074.asia-south1.run.app"
+        "EXPO_PUBLIC_API_URL": "https://repair-backendarun-838751841074.asia-south1.run.app",
+        "EXPO_PUBLIC_DOMAIN": "https://repair-backendarun-838751841074.asia-south1.run.app"
       }
     }
   },

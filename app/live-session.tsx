@@ -158,7 +158,51 @@ export default function LiveSessionScreen() {
     );
   }
 
-  // ── Native platform ───────────────────────────────────────────────────────
+  // ── Native + YouTube: embed is blocked in WebView (X-Frame-Options / 153) — open in app / browser
+  if (isYouTube) {
+    const ytColor = '#FF0000';
+    return (
+      <View style={[styles.container, { paddingTop: topPad, backgroundColor: '#FFF' }]}>
+        <View style={[styles.header, { backgroundColor: '#FFF', borderBottomColor: '#F0F0F0' }]}>
+          <Pressable hitSlop={12} onPress={() => router.back()} style={styles.headerBtn}>
+            <Ionicons name="arrow-back" size={24} color={C.text} />
+          </Pressable>
+          <View style={styles.titleWrap}>
+            <View style={[styles.liveDot, { backgroundColor: RED }]} />
+            <Text style={[styles.headerTitle, { color: C.text }]} numberOfLines={1}>
+              {title || 'Live Session'}
+            </Text>
+          </View>
+          <View style={styles.headerBtn} />
+        </View>
+        <View style={styles.ytRedirectContainer}>
+          <View style={[styles.ytIconCircle, { backgroundColor: ytColor + '15' }]}>
+            <Ionicons name="logo-youtube" size={56} color={ytColor} />
+          </View>
+          <View style={styles.livePill}>
+            <View style={[styles.liveDot, { backgroundColor: RED, width: 9, height: 9, borderRadius: 5 }]} />
+            <Text style={styles.livePillText}>LIVE NOW</Text>
+          </View>
+          <Text style={styles.ytTitle} numberOfLines={3}>{title || 'Live Session'}</Text>
+          <Text style={styles.ytSub}>
+            YouTube live streams cannot play inside the app.{'\n'}Tap below to watch in YouTube.
+          </Text>
+          <Pressable
+            style={[styles.ytWatchBtn, { backgroundColor: ytColor }]}
+            onPress={openInBrowser}
+          >
+            <Ionicons name="logo-youtube" size={20} color="#FFF" />
+            <Text style={styles.ytWatchBtnText}>Watch on YouTube</Text>
+          </Pressable>
+          <Pressable onPress={() => router.back()} style={{ marginTop: 16 }}>
+            <Text style={{ fontSize: 14, color: C.textSecondary, fontFamily: 'Inter_400Regular' }}>Go back</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
+
+  // ── Native platform (Bunny / other embeds) ─────────────────────────────────
   return (
     <View style={[styles.container, { paddingTop: topPad }]}>
       <View style={[styles.header, { backgroundColor: headerBg, borderBottomColor: isBunnyLive ? '#222' : '#F0F0F0' }]}>
