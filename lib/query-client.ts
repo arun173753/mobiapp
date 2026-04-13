@@ -1,8 +1,13 @@
 import { fetch as _expoFetch } from "expo/fetch";
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import Constants from "expo-constants";
 import { Platform } from "react-native";
-import { DEFAULT_PRODUCTION_API_ORIGIN, normalizeApiOrigin } from "@/lib/api-base";
+import {
+  DEFAULT_PRODUCTION_API_ORIGIN,
+  isLoopbackOrigin,
+  normalizeApiOrigin,
+} from "@/lib/api-base";
 
 // On web use native browser fetch so custom headers (x-session-token) are
 // always sent reliably. expo/fetch on deployed web builds can silently drop them.
@@ -13,22 +18,36 @@ const fetch: typeof _expoFetch = Platform.OS === "web" && typeof globalThis.fetc
 const SESSION_KEY = "mobi_session_token_v2";
 
 export function getApiUrl(): string {
-  const fromEnv =
-    normalizeApiOrigin(process.env.EXPO_PUBLIC_API_URL) ||
-    normalizeApiOrigin(process.env.EXPO_PUBLIC_DOMAIN);
-  if (fromEnv) {
-    if (typeof __DEV__ !== "undefined" && __DEV__) {
-      console.log("[getApiUrl] Using EXPO_PUBLIC_API_URL / EXPO_PUBLIC_DOMAIN");
+  const dev = typeof __DEV__ !== "undefined" && __DEV__;
+  const envCandidates = [
+    process.env.EXPO_PUBLIC_API_URL,
+    process.env.EXPO_PUBLIC_DOMAIN,
+    process.env.VITE_API_URL,
+    process.env.REACT_APP_API_URL,
+  ];
+  for (const raw of envCandidates) {
+    const n = normalizeApiOrigin(raw);
+    if (!n) continue;
+    if (dev) {
+      console.log("[getApiUrl] Using env API URL:", n);
+      return n;
     }
-    return fromEnv;
+    if (!isLoopbackOrigin(n)) return n;
   }
-  if (typeof __DEV__ !== "undefined" && __DEV__) {
+
+  const extra = Constants.expoConfig?.extra as { publicApiUrl?: string } | undefined;
+  const fromExtra = normalizeApiOrigin(extra?.publicApiUrl);
+  if (fromExtra) {
+    if (dev) return fromExtra;
+    if (!isLoopbackOrigin(fromExtra)) return fromExtra;
+  }
+
+  if (dev) {
     console.warn(
-      "[getApiUrl] Set EXPO_PUBLIC_API_URL (or EXPO_PUBLIC_DOMAIN) in .env — defaulting to localhost:5000",
+      "[getApiUrl] Set EXPO_PUBLIC_API_URL in .env — defaulting to http://127.0.0.1:5000",
     );
     return "http://127.0.0.1:5000";
   }
-  // Release APK/AAB: never use localhost (breaks leads, reels, auth)
   return DEFAULT_PRODUCTION_API_ORIGIN;
 }
 

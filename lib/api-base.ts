@@ -15,3 +15,13 @@ export function normalizeApiOrigin(raw: string | undefined): string {
   }
   return u.endsWith("/") ? u.slice(0, -1) : u;
 }
+
+/** True for localhost / loopback — must not be used in production client bundles. */
+export function isLoopbackOrigin(url: string): boolean {
+  try {
+    const h = new URL(url).hostname.toLowerCase();
+    return h === "localhost" || h === "127.0.0.1" || h === "[::1]" || h === "::1";
+  } catch {
+    return false;
+  }
+}

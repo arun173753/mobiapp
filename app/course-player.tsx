@@ -642,7 +642,7 @@ export default function CoursePlayerScreen() {
 
   const shareCourse = async () => {
     try {
-      const shareUrl = `${process.env.EXPO_PUBLIC_DOMAIN || 'https://atozmobilerepair.in'}/course/${courseId}`;
+      const shareUrl = `${getApiUrl()}/course/${courseId}`;
       const message = `Check out this course on Mobi: ${course?.title}\n\n${shareUrl}`;
       
       if (Platform.OS === 'web') {
