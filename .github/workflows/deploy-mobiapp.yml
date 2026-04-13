@@ -12,9 +12,10 @@ permissions:
 
 env:
   PROJECT_ID: mobi-backend-491410
-  REGION: asia-south1
+  REGION: us-central1
   SERVICE: mobiapp
-  IMAGE: gcr.io/mobi-backend-491410/mobiapp
+  # Artifact Registry (Docker) — replaces deprecated gcr.io/PROJECT/mobiapp
+  IMAGE: us-central1-docker.pkg.dev/mobi-backend-491410/mobi-repo/mobiapp:latest
 
 jobs:
   deploy:

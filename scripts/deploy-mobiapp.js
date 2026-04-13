@@ -7,7 +7,7 @@ const { execSync } = require("child_process");
 const path = require("path");
 
 const PROJECT_ID = "mobi-backend-491410";
-const REGION = "asia-south1";
+const REGION = "us-central1";
 const SERVICE = "mobiapp";
 
 function run(cmd) {

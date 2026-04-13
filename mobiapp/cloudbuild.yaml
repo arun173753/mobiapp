@@ -1,11 +1,21 @@
-# Submit from repo root: gcloud builds submit ./mobiapp --config mobiapp/cloudbuild.yaml --project=YOUR_PROJECT_ID
-# $PROJECT_ID is provided automatically by Cloud Build for the project where the build runs.
+# Submit from repo root:
+#   gcloud builds submit ./mobiapp --config mobiapp/cloudbuild.yaml --project=YOUR_PROJECT_ID
+# $PROJECT_ID is provided by Cloud Build. Image lives in Artifact Registry (us-central1), not gcr.io.
+#
+# Create the Docker repo if needed:
+#   gcloud artifacts repositories create mobi-repo --repository-format=docker --location=us-central1 --project=PROJECT_ID
 steps:
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/mobiapp', '.']
+    args:
+      - 'build'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/mobi-repo/mobiapp:latest'
+      - '.'
 
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/mobiapp']
+    args:
+      - 'push'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/mobi-repo/mobiapp:latest'
 
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
@@ -13,8 +23,8 @@ steps:
       - 'run'
       - 'deploy'
       - 'mobiapp'
-      - '--image=gcr.io/$PROJECT_ID/mobiapp'
-      - '--region=asia-south1'
+      - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/mobi-repo/mobiapp:latest'
+      - '--region=us-central1'
       - '--platform=managed'
       - '--allow-unauthenticated'
       - '--project=$PROJECT_ID'
@@ -24,4 +34,4 @@ steps:
       - '--timeout=60'
 
 images:
-  - 'gcr.io/$PROJECT_ID/mobiapp'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/mobi-repo/mobiapp:latest'

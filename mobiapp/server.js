@@ -21,7 +21,7 @@ app.get("/", (_req, res) => {
       process.env.GOOGLE_CLOUD_PROJECT ||
       process.env.GCLOUD_PROJECT ||
       "mobi-backend-491410",
-    region: process.env.REGION || "asia-south1",
+    region: process.env.REGION || "us-central1",
   });
 });
 
