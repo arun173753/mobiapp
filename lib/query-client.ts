@@ -17,29 +17,44 @@ const fetch: typeof _expoFetch = Platform.OS === "web" && typeof globalThis.fetc
 
 const SESSION_KEY = "mobi_session_token_v2";
 
+/** True when the web app is served from Firebase Hosting (not localhost dev). */
+function isFirebaseHostedWeb(): boolean {
+  if (Platform.OS !== "web" || typeof window === "undefined") return false;
+  const h = window.location.hostname.toLowerCase();
+  return h.endsWith(".web.app") || h.endsWith(".firebaseapp.com");
+}
+
 export function getApiUrl(): string {
   const dev = typeof __DEV__ !== "undefined" && __DEV__;
+
+  // Firebase Hosting: never trust a dev-machine .env that inlined api.example.com / localhost.
+  if (isFirebaseHostedWeb()) {
+    const extra = Constants.expoConfig?.extra as { publicApiUrl?: string } | undefined;
+    const fromExtra = normalizeApiOrigin(extra?.publicApiUrl);
+    if (fromExtra && !isUnusableProductionApiOrigin(fromExtra)) {
+      return fromExtra;
+    }
+    return DEFAULT_PRODUCTION_API_ORIGIN;
+  }
+
+  // API base only — do NOT use EXPO_PUBLIC_DOMAIN here (it is often the web app URL, e.g. *.web.app).
   const envCandidates = [
     process.env.EXPO_PUBLIC_API_URL,
-    process.env.EXPO_PUBLIC_DOMAIN,
     process.env.VITE_API_URL,
     process.env.REACT_APP_API_URL,
   ];
   for (const raw of envCandidates) {
     const n = normalizeApiOrigin(raw);
     if (!n) continue;
-    if (dev) {
-      console.log("[getApiUrl] Using env API URL:", n);
-      return n;
-    }
-    if (!isUnusableProductionApiOrigin(n)) return n;
+    if (isUnusableProductionApiOrigin(n)) continue;
+    if (dev) console.log("[getApiUrl] Using env API URL:", n);
+    return n;
   }
 
   const extra = Constants.expoConfig?.extra as { publicApiUrl?: string } | undefined;
   const fromExtra = normalizeApiOrigin(extra?.publicApiUrl);
-  if (fromExtra) {
-    if (dev) return fromExtra;
-    if (!isUnusableProductionApiOrigin(fromExtra)) return fromExtra;
+  if (fromExtra && !isUnusableProductionApiOrigin(fromExtra)) {
+    return fromExtra;
   }
 
   if (dev) {

@@ -22,6 +22,7 @@ function isUnusableProductionApiOrigin(url) {
     const h = new URL(url).hostname.toLowerCase();
     if (h === "localhost" || h === "127.0.0.1" || h === "[::1]") return true;
     if (h === "example.com" || h.endsWith(".example.com")) return true;
+    if (h.endsWith(".web.app") || h.endsWith(".firebaseapp.com")) return true;
     return false;
   } catch {
     return true;

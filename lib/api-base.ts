@@ -1,6 +1,5 @@
 /**
- * Default production API used when EXPO_PUBLIC_API_URL / EXPO_PUBLIC_DOMAIN
- * are missing from the native binary (e.g. misconfigured EAS env).
+ * Default production API when EXPO_PUBLIC_API_URL is missing from the client bundle.
  * Override via EAS secrets — keep in sync with your Cloud Run service.
  */
 export const DEFAULT_PRODUCTION_API_ORIGIN =
@@ -36,6 +35,20 @@ export function isPlaceholderApiOrigin(url: string): boolean {
   }
 }
 
+/** Firebase Hosting / Auth hosting — the static app origin, not your Cloud Run API. */
+export function isFirebaseHostingOrigin(url: string): boolean {
+  try {
+    const h = new URL(url).hostname.toLowerCase();
+    return h.endsWith(".web.app") || h.endsWith(".firebaseapp.com");
+  } catch {
+    return false;
+  }
+}
+
 export function isUnusableProductionApiOrigin(url: string): boolean {
-  return isLoopbackOrigin(url) || isPlaceholderApiOrigin(url);
+  return (
+    isLoopbackOrigin(url) ||
+    isPlaceholderApiOrigin(url) ||
+    isFirebaseHostingOrigin(url)
+  );
 }
