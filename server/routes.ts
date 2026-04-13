@@ -8728,8 +8728,11 @@ Be specific about component locations and names. If image quality is poor or not
 
   // Helper: resolve authenticated profile from x-session-token header
   async function getLeadProfile(req: any): Promise<{ id: string; phone: string; name: string; role: string } | null> {
-    const sessionToken =
+    let sessionToken: string | undefined =
       req.headers["x-session-token"] || req.body?.sessionToken || req.query?.sessionToken;
+    if (Array.isArray(sessionToken)) sessionToken = sessionToken[0];
+    if (sessionToken != null && typeof sessionToken !== "string") sessionToken = String(sessionToken);
+    sessionToken = sessionToken?.trim();
     if (!sessionToken) return null;
     try {
       const sessionRows = await db.select().from(sessions).where(eq(sessions.sessionToken, sessionToken as string));

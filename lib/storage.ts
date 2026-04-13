@@ -258,27 +258,43 @@ export async function seedDemoData(currentProfile: UserProfile): Promise<void> {
 }
 
 export async function saveSessionToken(token: string): Promise<void> {
+  const t = String(token).trim();
   // On web, use localStorage for better persistence
   if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
-    window.localStorage.setItem(KEYS.SESSION_TOKEN, token);
+    window.localStorage.setItem(KEYS.SESSION_TOKEN, t);
   }
-  await AsyncStorage.setItem(KEYS.SESSION_TOKEN, token);
+  await AsyncStorage.setItem(KEYS.SESSION_TOKEN, t);
 }
 
 export async function getSessionToken(): Promise<string | null> {
-  // On web, try localStorage first (more reliable)
-  if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
-    const token = window.localStorage.getItem(KEYS.SESSION_TOKEN);
+  try {
+    // On web, try localStorage first (more reliable)
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
+      const token = window.localStorage.getItem(KEYS.SESSION_TOKEN);
+      if (token) return token;
+    }
+    let token = await AsyncStorage.getItem(KEYS.SESSION_TOKEN);
     if (token) return token;
+    const legacyToken = await AsyncStorage.getItem('mobi_session_token');
+    if (legacyToken) {
+      await AsyncStorage.setItem(KEYS.SESSION_TOKEN, legacyToken);
+      if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem(KEYS.SESSION_TOKEN, legacyToken);
+      }
+    }
+    return legacyToken;
+  } catch {
+    return null;
   }
-  return await AsyncStorage.getItem(KEYS.SESSION_TOKEN);
 }
 
 export async function clearSessionToken(): Promise<void> {
   if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
     window.localStorage.removeItem(KEYS.SESSION_TOKEN);
+    window.localStorage.removeItem('mobi_session_token');
   }
   await AsyncStorage.removeItem(KEYS.SESSION_TOKEN);
+  await AsyncStorage.removeItem('mobi_session_token');
 }
 
 export async function clearAll(): Promise<void> {

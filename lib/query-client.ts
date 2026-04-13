@@ -1,6 +1,5 @@
 import { fetch as _expoFetch } from "expo/fetch";
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import { Platform } from "react-native";
 import {
@@ -8,14 +7,13 @@ import {
   isUnusableProductionApiOrigin,
   normalizeApiOrigin,
 } from "@/lib/api-base";
+import { clearSessionToken, getSessionToken } from "@/lib/storage";
 
 // On web use native browser fetch so custom headers (x-session-token) are
 // always sent reliably. expo/fetch on deployed web builds can silently drop them.
 const fetch: typeof _expoFetch = Platform.OS === "web" && typeof globalThis.fetch === "function"
   ? (globalThis.fetch as any)
   : _expoFetch;
-
-const SESSION_KEY = "mobi_session_token_v2";
 
 /** True when the web app is served from Firebase Hosting (not localhost dev). */
 function isFirebaseHostedWeb(): boolean {
@@ -66,26 +64,6 @@ export function getApiUrl(): string {
   return DEFAULT_PRODUCTION_API_ORIGIN;
 }
 
-async function getSessionToken(): Promise<string | null> {
-  try {
-    // On web, try localStorage first (more reliable than AsyncStorage)
-    if (Platform.OS === "web" && typeof window !== "undefined" && window.localStorage) {
-      const token = window.localStorage.getItem(SESSION_KEY);
-      if (token) return token;
-    }
-    // Fall back to AsyncStorage
-    const token = await AsyncStorage.getItem(SESSION_KEY);
-    if (token) return token;
-    const legacyToken = await AsyncStorage.getItem("mobi_session_token");
-    if (legacyToken) {
-      await AsyncStorage.setItem(SESSION_KEY, legacyToken);
-    }
-    return legacyToken;
-  } catch {
-    return null;
-  }
-}
-
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
@@ -109,7 +87,7 @@ export async function apiRequest(
   const url = new URL(route, baseUrl);
 
   const isFormData = data instanceof FormData;
-  const sessionToken = await getSessionToken();
+  const sessionToken = (await getSessionToken())?.trim() || null;
 
   const headers: Record<string, string> = {};
   if (!isFormData && data) headers["Content-Type"] = "application/json";
@@ -147,13 +125,23 @@ export async function apiRequest(
     throw new Error(`Network error on ${route}: ${error.message}`);
   }
 
-  if (res.status === 401 && !route.includes('/api/otp/') && !route.includes('/api/auth/')) {
+  if (
+    res.status === 401 &&
+    sessionToken &&
+    !route.includes('/api/otp/') &&
+    !route.includes('/api/auth/')
+  ) {
     if (__DEV__) console.log('[API] 401 Unauthorized for', route);
     try {
       const cloned = res.clone();
       const body = await cloned.json();
-      if (body.message === 'Invalid session') {
-        await AsyncStorage.removeItem(SESSION_KEY);
+      const msg = body?.message || body?.error;
+      if (
+        msg === 'Invalid session' ||
+        msg === 'Authentication required' ||
+        msg === 'Unauthorized: Session token required'
+      ) {
+        await clearSessionToken();
         if (__DEV__) console.log('[API] Cleared stale session token');
       }
     } catch {}
@@ -172,7 +160,7 @@ export const getQueryFn: <T>(options: {
     const baseUrl = getApiUrl();
     const url = new URL(queryKey.join("/") as string, baseUrl);
 
-    const sessionToken = await getSessionToken();
+    const sessionToken = (await getSessionToken())?.trim() || null;
     const headers: Record<string, string> = {};
     if (sessionToken) headers["x-session-token"] = sessionToken;
 

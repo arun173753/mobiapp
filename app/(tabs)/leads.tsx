@@ -15,11 +15,14 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
+import { Redirect } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { WebView } from 'react-native-webview';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getApiUrl } from '@/lib/query-client';
+import { apiRequest, getApiUrl } from '@/lib/query-client';
+import { getSessionToken } from '@/lib/storage';
 import { useApp } from '@/lib/context';
+import { isAdminUser } from '@/lib/types';
 
 const ORANGE = '#FF6A00';
 const ORANGE_LIGHT = '#FFF3EC';
@@ -29,8 +32,6 @@ const TEXT_MID = '#555555';
 const TEXT_LIGHT = '#999999';
 const GREEN = '#16A34A';
 const GREEN_LIGHT = '#F0FDF4';
-
-const SESSION_KEY = 'mobi_session_token_v2';
 
 type CategoryKey = 'all' | 'repair' | 'electrician' | 'plumber' | 'ac' | 'cleaning' | 'other';
 type SortOrder = 'latest' | 'oldest';
@@ -314,6 +315,8 @@ function EmptyState({ isMyLeads, onRefresh }: { isMyLeads: boolean; onRefresh: (
 export default function LeadsScreen() {
   const insets = useSafeAreaInsets();
   const { profile } = useApp();
+  const isAdmin = isAdminUser(profile);
+  const canAccessLeads = profile?.role === 'technician' || isAdmin;
   const { width: screenWidth } = useWindowDimensions();
 
   const [activeTab, setActiveTab] = useState<'box' | 'myLeads'>('box');
@@ -322,8 +325,6 @@ export default function LeadsScreen() {
   const [buyingId, setBuyingId] = useState<string | null>(null);
   const [paymentUrl, setPaymentUrl] = useState('');
   const [showPaymentModal, setShowPaymentModal] = useState(false);
-  const [storedToken, setStoredToken] = useState('');
-  const [tokenLoaded, setTokenLoaded] = useState(false);
   const [isAutoRefreshing, setIsAutoRefreshing] = useState(false);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
 
@@ -352,53 +353,45 @@ export default function LeadsScreen() {
     width: tabHalfWidth,
   }));
 
-  useEffect(() => {
-    (async () => {
-      const token = Platform.OS === 'web'
-        ? window.localStorage.getItem(SESSION_KEY) || ''
-        : await AsyncStorage.getItem(SESSION_KEY) || '';
-      setStoredToken(token);
-      setTokenLoaded(true);
-    })();
-  }, []);
-
-  const getHeaders = useCallback((): Record<string, string> => ({
-    'x-session-token': storedToken,
-  }), [storedToken]);
+  function normalizeLeadsPayload(data: unknown): Lead[] {
+    if (Array.isArray(data)) return data as Lead[];
+    if (data && typeof data === 'object' && Array.isArray((data as { leads?: unknown }).leads)) {
+      return (data as { leads: Lead[] }).leads;
+    }
+    return [];
+  }
 
   const { data: allLeads, isLoading: loadingAll, isError: errorAll, refetch: refetchAll, isFetching: fetchingAll } = useQuery<Lead[]>({
-    queryKey: ['/api/leads', selectedCategory, sort, storedToken],
+    queryKey: ['/api/leads', selectedCategory, sort, profile?.id],
     queryFn: async () => {
-      const base = getApiUrl();
-      const url = new URL(`/api/leads?category=${selectedCategory}&sort=${sort}`, base).toString();
-      const res = await fetch(url, { headers: getHeaders() });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.message || 'Failed to fetch leads');
-      }
-      return res.json();
+      const res = await apiRequest('GET', `/api/leads?category=${selectedCategory}&sort=${sort}`);
+      return normalizeLeadsPayload(await res.json());
     },
-    enabled: activeTab === 'box' && tokenLoaded,
+    enabled: activeTab === 'box' && canAccessLeads,
     staleTime: 20000,
-    retry: false,
+    retry: 1,
+    refetchOnWindowFocus: true,
   });
 
   const { data: myLeads, isLoading: loadingMy, isError: errorMy, refetch: refetchMy, isFetching: fetchingMy } = useQuery<Lead[]>({
-    queryKey: ['/api/leads/my-leads', storedToken],
+    queryKey: ['/api/leads/my-leads', profile?.id],
     queryFn: async () => {
-      const base = getApiUrl();
-      const url = new URL('/api/leads/my-leads', base).toString();
-      const res = await fetch(url, { headers: getHeaders() });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.message || 'Failed to fetch my leads');
-      }
-      return res.json();
+      const res = await apiRequest('GET', '/api/leads/my-leads');
+      return normalizeLeadsPayload(await res.json());
     },
-    enabled: activeTab === 'myLeads' && tokenLoaded,
+    enabled: activeTab === 'myLeads' && canAccessLeads,
     staleTime: 20000,
-    retry: false,
+    retry: 1,
+    refetchOnWindowFocus: true,
   });
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!canAccessLeads) return;
+      if (activeTab === 'box') void refetchAll();
+      else void refetchMy();
+    }, [canAccessLeads, activeTab, refetchAll, refetchMy]),
+  );
 
   // 10-second silent auto-refresh
   useEffect(() => {
@@ -420,12 +413,7 @@ export default function LeadsScreen() {
     setBuyingId(lead.id);
     try {
       const base = getApiUrl();
-      const url = new URL(`/api/leads/${lead.id}/buy-order`, base).toString();
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { ...getHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
+      const res = await apiRequest('POST', `/api/leads/${lead.id}/buy-order`, {});
       const data = await res.json();
 
       if (!data.success) {
@@ -439,6 +427,7 @@ export default function LeadsScreen() {
         return;
       }
 
+      const sessionToken = (await getSessionToken()) || '';
       const params = new URLSearchParams({
         orderId: data.orderId,
         amount: String(data.amount),
@@ -448,7 +437,7 @@ export default function LeadsScreen() {
         technicianName: profile?.name || '',
         technicianPhone: profile?.phone || '',
         technicianEmail: profile?.email || '',
-        sessionToken: storedToken,
+        sessionToken,
       });
       const checkoutUrl = new URL(`/api/leads/checkout?${params}`, base).toString();
 
@@ -466,7 +455,7 @@ export default function LeadsScreen() {
       Alert.alert('Error', 'Could not start payment. Please try again.');
       setBuyingId(null);
     }
-  }, [buyingId, getHeaders, storedToken, profile, refetchAll]);
+  }, [buyingId, profile, refetchAll]);
 
   const handlePaymentMessage = useCallback((event: { nativeEvent: { data: string } }) => {
     try {
@@ -488,10 +477,13 @@ export default function LeadsScreen() {
     } catch { /* no-op */ }
   }, [refetchAll, refetchMy]);
 
-  const isTechnician = profile?.role === 'technician';
   const topPad = Platform.OS === 'web' ? 67 : insets.top;
 
-  if (!isTechnician) {
+  if (profile?.role === 'customer') {
+    return <Redirect href="/customer-home" />;
+  }
+
+  if (!canAccessLeads) {
     return (
       <View style={[styles.container, { paddingTop: topPad + 24 }]}>
         <View style={styles.emptyContainer}>
@@ -499,13 +491,13 @@ export default function LeadsScreen() {
             <Ionicons name="lock-closed-outline" size={36} color={ORANGE} />
           </View>
           <Text style={styles.emptyTitle}>Technicians Only</Text>
-          <Text style={styles.emptySubtitle}>Lead Box is available for verified technicians.</Text>
+          <Text style={styles.emptySubtitle}>This area is only for verified technicians.</Text>
         </View>
       </View>
     );
   }
 
-  const isLoading = (activeTab === 'box' ? loadingAll : loadingMy) || !tokenLoaded;
+  const isLoading = activeTab === 'box' ? loadingAll : loadingMy;
   const isError = activeTab === 'box' ? errorAll : errorMy;
   const isFetching = (activeTab === 'box' ? fetchingAll : fetchingMy) && !isLoading;
   const refetch = activeTab === 'box' ? refetchAll : refetchMy;

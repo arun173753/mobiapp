@@ -67,6 +67,7 @@ function NativeTabLayout() {
         <NativeTabs.Trigger name="nearby-shops" hidden />
         <NativeTabs.Trigger name="learn" hidden />
         <NativeTabs.Trigger name="reels-tab" hidden />
+        <NativeTabs.Trigger name="leads" hidden />
       </NativeTabs>
     );
   }
@@ -340,7 +341,12 @@ function ClassicTabLayout() {
         name="leads"
         options={{
           title: "Leads",
-          href: (isTechnician || isAdminTabs) && navigationMode === 'default' ? '/leads' : null,
+          href:
+            !isCustomer &&
+            (isTechnician || isAdminTabs) &&
+            navigationMode === 'default'
+              ? '/leads'
+              : null,
           tabBarIcon: ({ color, focused }) => (
             <Ionicons name={focused ? "briefcase" : "briefcase-outline"} size={22} color={color} />
           ),
