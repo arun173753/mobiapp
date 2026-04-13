@@ -9,16 +9,39 @@ const appJson = require("./app.json");
 const DEFAULT_PUBLIC_API =
   "https://repair-backendarun-838751841074.asia-south1.run.app";
 
+function normalizeApiOriginLocal(raw) {
+  if (!raw || !String(raw).trim()) return "";
+  let u = String(raw).trim();
+  if (!/^https?:\/\//i.test(u)) u = `https://${u}`;
+  return u.replace(/\/+$/, "");
+}
+
+function isUnusableProductionApiOrigin(url) {
+  if (!url) return true;
+  try {
+    const h = new URL(url).hostname.toLowerCase();
+    if (h === "localhost" || h === "127.0.0.1" || h === "[::1]") return true;
+    if (h === "example.com" || h.endsWith(".example.com")) return true;
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 module.exports = () => {
-  const fromShell =
+  const fromShellRaw =
     process.env.EXPO_PUBLIC_API_URL ||
     process.env.EXPO_PUBLIC_DOMAIN ||
     process.env.VITE_API_URL ||
     process.env.REACT_APP_API_URL;
-  // Production export/build: embed default API so the client works without a .env on CI
-  const publicApiUrl =
-    fromShell ||
-    (process.env.NODE_ENV === "production" ? DEFAULT_PUBLIC_API : undefined);
+  const fromShellNorm = normalizeApiOriginLocal(fromShellRaw);
+  const shellOk = fromShellNorm && !isUnusableProductionApiOrigin(fromShellNorm);
+  // .env.local can override .env.production with a placeholder (e.g. api.example.com) — ignore it
+  const publicApiUrl = shellOk
+    ? fromShellNorm
+    : process.env.NODE_ENV === "production"
+      ? DEFAULT_PUBLIC_API
+      : undefined;
 
   const mapsKey =
     process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY ||

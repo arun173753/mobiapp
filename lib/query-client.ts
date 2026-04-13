@@ -5,7 +5,7 @@ import Constants from "expo-constants";
 import { Platform } from "react-native";
 import {
   DEFAULT_PRODUCTION_API_ORIGIN,
-  isLoopbackOrigin,
+  isUnusableProductionApiOrigin,
   normalizeApiOrigin,
 } from "@/lib/api-base";
 
@@ -32,14 +32,14 @@ export function getApiUrl(): string {
       console.log("[getApiUrl] Using env API URL:", n);
       return n;
     }
-    if (!isLoopbackOrigin(n)) return n;
+    if (!isUnusableProductionApiOrigin(n)) return n;
   }
 
   const extra = Constants.expoConfig?.extra as { publicApiUrl?: string } | undefined;
   const fromExtra = normalizeApiOrigin(extra?.publicApiUrl);
   if (fromExtra) {
     if (dev) return fromExtra;
-    if (!isLoopbackOrigin(fromExtra)) return fromExtra;
+    if (!isUnusableProductionApiOrigin(fromExtra)) return fromExtra;
   }
 
   if (dev) {

@@ -25,3 +25,17 @@ export function isLoopbackOrigin(url: string): boolean {
     return false;
   }
 }
+
+/** Placeholder / tutorial hosts — never use in shipped web or release APK (often set in .env.local). */
+export function isPlaceholderApiOrigin(url: string): boolean {
+  try {
+    const h = new URL(url).hostname.toLowerCase();
+    return h === "example.com" || h.endsWith(".example.com");
+  } catch {
+    return false;
+  }
+}
+
+export function isUnusableProductionApiOrigin(url: string): boolean {
+  return isLoopbackOrigin(url) || isPlaceholderApiOrigin(url);
+}
