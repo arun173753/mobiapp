@@ -1,4 +1,4 @@
-import BuySellScreen from '@/app/buy-sell';
+import BuySellScreen from '../buy-sell';
 
 export default function BuySellTab() {
   return <BuySellScreen isEmbedded={true} />;

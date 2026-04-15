@@ -4,7 +4,7 @@
 Mobile app (Expo/React Native) for repair professionals with social feed, directory, marketplace, and insurance.
 
 **Backend**: Express/TypeScript on Cloud Run @ `https://repair-backendarun-838751841074.asia-south1.run.app` (service: `repair-backendarun`, project: `mobi-backend-491410`)
-**Frontend**: Firebase Hosting @ `https://mobile-repair-app-276b6.web.app`
+**Frontend**: Firebase Hosting @ `https://arunmobi-app.web.app`
 
 ## ⚠️ CRITICAL DEPLOYMENT NOTES
 - **NEVER use `npm run server:build`** for Cloud Run deploys — it uses `--packages=external` which creates an incomplete bundle that crashes in Docker (missing drizzle-orm etc.)

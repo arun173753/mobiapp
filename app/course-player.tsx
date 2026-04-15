@@ -7,7 +7,8 @@ import {
 } from 'react-native';
 import * as ScreenCapture from 'expo-screen-capture';
 import { resolveBunnyPlaybackUrl, getBunnyMp4Url, isBunnyUrl, getBunnyEmbedUrl } from '@/lib/bunny-cdn';
-import { File as FSFile, Paths, getInfoAsync, deleteAsync, createDownloadResumable } from 'expo-file-system';
+import { File as FSFile, Paths } from 'expo-file-system';
+import { getInfoAsync, deleteAsync, createDownloadResumable } from 'expo-file-system/legacy';
 import Animated, {
   useSharedValue, useAnimatedStyle, withTiming, runOnJS,
 } from 'react-native-reanimated';

@@ -1,9 +1,22 @@
 /**
- * Default production API when EXPO_PUBLIC_API_URL is missing from the client bundle.
- * Override via EAS secrets — keep in sync with your Cloud Run service.
+ * API base URL — MUST come from `process.env.EXPO_PUBLIC_API_URL`.
+ * This project is locked to a single Cloud Run backend (no fallbacks).
  */
-export const DEFAULT_PRODUCTION_API_ORIGIN =
-  "https://repair-backendarun-838751841074.asia-south1.run.app";
+export function getApiUrl(): string {
+  const raw = process.env.EXPO_PUBLIC_API_URL;
+  const n = normalizeApiOrigin(raw);
+  if (!n) {
+    throw new Error(
+      "[API] Missing EXPO_PUBLIC_API_URL. Set it in `.env` (local) and as an EAS secret (builds).",
+    );
+  }
+  if (isUnusableProductionApiOrigin(n)) {
+    throw new Error(
+      `[API] Invalid EXPO_PUBLIC_API_URL: ${n}. Must be your Cloud Run origin (https://...run.app), not localhost/example/*.web.app.`,
+    );
+  }
+  return n;
+}
 
 /** Normalize host or origin: trim slashes, ensure https:// for URL(base) usage */
 export function normalizeApiOrigin(raw: string | undefined): string {

@@ -10,7 +10,12 @@ import { router } from 'expo-router';
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import * as ImagePicker from 'expo-image-picker';
 import { Audio } from 'expo-av';
-import * as FileSystem from 'expo-file-system';
+import {
+  cacheDirectory,
+  writeAsStringAsync,
+  readAsStringAsync,
+  EncodingType,
+} from 'expo-file-system/legacy';
 import { getApiUrl } from '@/lib/query-client';
 
 const BG      = '#FFFFFF';
@@ -300,7 +305,7 @@ export default function AIRepairScreen() {
   const playVoice = useCallback(async (messageId: string, text: string) => {
     try {
       // On web, use browser's Web Speech API (free, instant, no API calls)
-      if (Platform.OS === 'web') {
+      if ((Platform as { OS: string }).OS === 'web') {
         // If already playing this message, stop it
         if (playingMessageId === messageId) {
           console.log('[TTS] Stopping current speech...');
@@ -365,7 +370,7 @@ export default function AIRepairScreen() {
 
       console.log('[TTS] Requesting audio from backend...');
 
-      if (Platform.OS === 'web') {
+      if ((Platform as { OS: string }).OS === 'web') {
         const response = await fetch(`${getApiUrl()}/api/ai/repair/tts`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -385,22 +390,23 @@ export default function AIRepairScreen() {
         soundRef.current = sound;
         await sound.loadAsync({ uri });
       } else {
-        const fileUri = FileSystem.cacheDirectory + `tts-${Date.now()}.mp3`;
-        const downloadResult = await FileSystem.downloadAsync(
-          `${getApiUrl()}/api/ai/repair/tts`,
-          fileUri,
-          {
-            httpMethod: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text }),
-          }
-        );
-        if (downloadResult.status !== 200) {
-          throw new Error(`TTS failed with status: ${downloadResult.status}`);
+        const dir = cacheDirectory || '';
+        const fileUri = `${dir}tts-${Date.now()}.mp3`;
+        const ttsRes = await fetch(`${getApiUrl()}/api/ai/repair/tts`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        if (!ttsRes.ok) {
+          throw new Error(`TTS failed with status: ${ttsRes.status}`);
         }
+        const arr = new Uint8Array(await ttsRes.arrayBuffer());
+        let bs = '';
+        for (let i = 0; i < arr.length; i++) bs += String.fromCharCode(arr[i]);
+        await writeAsStringAsync(fileUri, btoa(bs), { encoding: EncodingType.Base64 });
         const sound = new Audio.Sound();
         soundRef.current = sound;
-        await sound.loadAsync({ uri: downloadResult.uri });
+        await sound.loadAsync({ uri: fileUri });
       }
 
       const activeSound = soundRef.current;
@@ -524,7 +530,7 @@ export default function AIRepairScreen() {
 
   const startVoiceRecord = useCallback(async () => {
     setVoiceErr(null);
-    if (Platform.OS === 'web') {
+    if ((Platform as { OS: string }).OS === 'web') {
       const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
       if (!SpeechRecognition) {
         setVoiceErr('Speech recognition not supported on this browser');
@@ -571,7 +577,7 @@ export default function AIRepairScreen() {
   }, [activeTab, sendMessage, sendVoiceMessage]);
 
   const stopVoiceRecord = useCallback(async () => {
-    if (Platform.OS === 'web') {
+    if ((Platform as { OS: string }).OS === 'web') {
       if (recordingRef.current && (recordingRef.current as any).stop) {
         (recordingRef.current as any).stop();
       }
@@ -596,7 +602,7 @@ export default function AIRepairScreen() {
     if (!uri) { console.warn('[Voice] No URI after recording'); return; }
 
     try {
-      const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+      const base64 = await readAsStringAsync(uri, { encoding: EncodingType.Base64 });
       const mimeType = Platform.OS === 'ios' ? 'audio/m4a' : 'audio/3gp';
       const apiUrl = getApiUrl();
       const res = await fetch(`${apiUrl}/api/ai/repair/stt`, {
@@ -694,8 +700,8 @@ export default function AIRepairScreen() {
     return matchSearch && matchCategory;
   });
 
-  const topPad = insets.top + (Platform.OS === 'web' ? 67 : 0);
-  const botPad = insets.bottom + (Platform.OS === 'web' ? 34 : 0);
+  const topPad = insets.top + ((Platform as { OS: string }).OS === 'web' ? 67 : 0);
+  const botPad = insets.bottom + ((Platform as { OS: string }).OS === 'web' ? 34 : 0);
 
   // ─── Render ─────────────────────────────────────────────────────────────────
 

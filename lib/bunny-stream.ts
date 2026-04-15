@@ -1,19 +1,24 @@
 /**
- * Bunny Stream — Direct upload from device to Bunny CDN.
+ * Bunny Stream — Direct upload from device to Bunny (no video bytes through your API).
  *
  * Strategy:
- *  - Native (iOS/Android): Manual TUS chunked upload reading 8MB chunks
- *    from expo-file-system. The entire file is NEVER loaded into RAM.
- *  - Web: Standard tus-js-client with blob (file is already in browser memory).
+ *  - Native: TUS chunked upload from expo-file-system (small chunks; file not fully in RAM).
+ *  - Web: tus-js-client. Pass a `File` from `<input type="file">` / picker when available so
+ *    tus can read in chunks instead of `fetch(uri).blob()` buffering the whole file.
  *
  * Flow:
- *  1. POST /api/bunny/create-video  → get videoId + signature
- *  2. TUS upload directly to video.bunnycdn.com/tusupload
- *  3. Poll GET /api/bunny/video-status/:videoId until encoded
+ *  1. POST /api/bunny/create-video → videoId, libraryId, TUS signature (time-limited; not the API key)
+ *  2. TUS upload directly to https://video.bunnycdn.com/tusupload
+ *  3. Optional: GET /api/bunny/video-status/:videoId until encoded
+ *
+ * Security: Do NOT put BUNNY_STREAM_API_KEY in the client. Bunny’s simple PUT
+ * `PUT …/library/{id}/videos/{videoId}` with AccessKey must stay server-side only.
+ * TODO: If Bunny adds scoped upload tokens for browser PUT + XHR progress, wire that here.
  */
 
 import { Platform } from 'react-native';
 import { apiRequest } from '@/lib/query-client';
+import * as FileSystemLegacy from 'expo-file-system/legacy';
 import type { CancelSignal } from '@/lib/upload-manager';
 
 export interface BunnyVideoSlot {
@@ -33,19 +38,16 @@ export interface UploadProgress {
 
 export type ProgressCallback = (p: UploadProgress) => void;
 
-export async function createBunnyVideoSlot(title: string): Promise<BunnyVideoSlot> {
-  const res = await apiRequest('POST', '/api/bunny/create-video', { title });
+export async function createBunnyVideoSlot(title?: string): Promise<BunnyVideoSlot> {
+  const res = await apiRequest(
+    'POST',
+    '/api/bunny/create-video',
+    { title: title?.trim() || 'temp-video' },
+    { timeoutMs: 60000, retries: 1 },
+  );
   const data = await res.json();
   if (!data.success) throw new Error(data.message || 'Failed to create video slot');
   return data as BunnyVideoSlot;
-}
-
-async function uploadDirectVideo(uri: string, onProgress?: ProgressCallback): Promise<{ videoId: string; playbackUrl: string; directUrl: string }> {
-  onProgress?.({ percent: 0, message: 'Uploading video directly...' });
-  const res = await apiRequest('POST', '/api/videos/upload', { uri });
-  const data = await res.json();
-  if (!data.success) throw new Error(data.message || 'Failed to upload video');
-  return data;
 }
 
 function formatETA(seconds: number): string {
@@ -71,8 +73,9 @@ async function uploadNativeChunked(
   onProgress?: ProgressCallback,
   cancelSignal?: CancelSignal,
 ): Promise<void> {
-  const FileSystem = await import('expo-file-system');
-  const CHUNK = 8 * 1024 * 1024;
+  // Keep memory low on Android (base64 inflates ~33%).
+  // 2MB chunks prevent app kills/OOM on mid devices.
+  const CHUNK = 2 * 1024 * 1024;
 
   onProgress?.({ percent: 1, message: 'Connecting to upload server...' });
 
@@ -118,8 +121,8 @@ async function uploadNativeChunked(
 
     const chunkSize = Math.min(CHUNK, fileSize - offset);
 
-    const b64 = await (FileSystem as any).readAsStringAsync(uri, {
-      encoding: 'base64',
+    const b64 = await FileSystemLegacy.readAsStringAsync(uri, {
+      encoding: FileSystemLegacy.EncodingType.Base64,
       position: offset,
       length: chunkSize,
     });
@@ -197,7 +200,7 @@ async function uploadWebTus(
         videoId: slot.videoId,
         libraryId: String(slot.libraryId),
       },
-      chunkSize: 8 * 1024 * 1024,
+      chunkSize: 16 * 1024 * 1024,
       onError(error) {
         reject(new Error(`Upload failed: ${error.message || error}`));
       },
@@ -221,20 +224,25 @@ export async function uploadToBunnyStream(
   onProgress?: ProgressCallback,
   cancelSignal?: CancelSignal,
   fileSize?: number,
+  webFile?: Blob | File | null,
 ): Promise<void> {
   if (Platform.OS !== 'web') {
-    const FileSystem = await import('expo-file-system');
     let size = fileSize ?? 0;
     if (!size) {
-      const info = await (FileSystem as any).getInfoAsync(uri, { size: true }) as any;
-      size = info.size ?? 0;
+      const info = await FileSystemLegacy.getInfoAsync(uri);
+      size = info.exists ? info.size ?? 0 : 0;
     }
     if (!size) throw new Error('Cannot determine video file size. Please try selecting the video again.');
     return uploadNativeChunked(uri, slot, size, onProgress, cancelSignal);
   } else {
-    onProgress?.({ percent: 0, message: 'Loading video file...' });
-    const r = await fetch(uri);
-    const file = await r.blob();
+    let file: Blob;
+    if (webFile && typeof (webFile as any).size === 'number' && (webFile as any).size > 0) {
+      file = webFile;
+    } else {
+      onProgress?.({ percent: 0, message: 'Loading video file...' });
+      const r = await fetch(uri);
+      file = await r.blob();
+    }
     return uploadWebTus(file, slot, onProgress, cancelSignal);
   }
 }
@@ -250,13 +258,13 @@ export async function waitForBunnyEncoding(
     pollingCount++;
     await new Promise(r => setTimeout(r, pollingCount > 20 ? 10000 : 4000)); // Slower polling after initial checks
     try {
-      const res = await apiRequest('GET', `/api/bunny/video-status/${videoId}`);
+      const res = await apiRequest('GET', `/api/bunny/video-status/${videoId}`, undefined, { timeoutMs: 60000 });
       const data = await res.json();
       if (!data.success) continue;
       const pct = data.encodeProgress ?? 0;
       if (data.status === 3) {
         onProgress?.({ percent: 100, message: 'Encoding complete!' });
-        return data.playbackUrl;
+        return data.playbackUrl || data.mp4Url || data.directUrl;
       } else if (data.status === 4) {
         throw new Error('Bunny encoding failed');
       } else {
@@ -267,7 +275,10 @@ export async function waitForBunnyEncoding(
       if (e?.message?.startsWith('Bunny encoding failed')) throw e;
     }
   }
-  throw new Error('Encoding timed out after 30 minutes. The video may be too large or taking longer than expected to process.');
+  const mins = Math.max(1, Math.ceil(timeoutMs / 60000));
+  throw new Error(
+    `Encoding timed out after ${mins} minute(s). The video may still finish processing on Bunny — you can try posting again later.`,
+  );
 }
 
 export async function uploadVideoToBunnyStream(
@@ -277,18 +288,26 @@ export async function uploadVideoToBunnyStream(
   cancelSignal?: CancelSignal,
   waitForEncoding = false,
   fileSize?: number,
+  webFile?: Blob | File | null,
 ): Promise<{ videoId: string; playbackUrl: string; directUrl: string }> {
   onProgress?.({ percent: 0, message: 'Preparing upload...' });
   try {
     const slot = await createBunnyVideoSlot(title);
 
     onProgress?.({ percent: 1, message: 'Starting upload...' });
-    await uploadToBunnyStream(uri, slot, p => {
-      onProgress?.({ percent: Math.max(1, Math.round(p.percent * 0.95)), message: p.message });
-    }, cancelSignal, fileSize);
+    await uploadToBunnyStream(
+      uri,
+      slot,
+      (p) => {
+        onProgress?.({ percent: Math.max(1, Math.round(p.percent * 0.95)), message: p.message });
+      },
+      cancelSignal,
+      fileSize,
+      webFile,
+    );
 
     if (waitForEncoding) {
-      const finalUrl = await waitForBunnyEncoding(slot.videoId, p =>
+      const finalUrl = await waitForBunnyEncoding(slot.videoId, (p) =>
         onProgress?.({ percent: 95 + Math.round(p.percent * 0.05), message: p.message }),
       );
       return { videoId: slot.videoId, playbackUrl: finalUrl, directUrl: slot.directUrl };
@@ -296,10 +315,6 @@ export async function uploadVideoToBunnyStream(
 
     return { videoId: slot.videoId, playbackUrl: slot.playbackUrl, directUrl: slot.directUrl };
   } catch (error: any) {
-    const message = String(error?.message || error || '');
-    if (message.includes('Failed to create video slot') || message.includes('Failed to create Bunny Stream video') || message.includes('503') || message.includes('502')) {
-      return uploadDirectVideo(uri, onProgress);
-    }
     throw error;
   }
 }

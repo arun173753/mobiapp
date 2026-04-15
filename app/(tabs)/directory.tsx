@@ -6,11 +6,10 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router } from 'expo-router';
 import * as Location from 'expo-location';
 import { useApp } from '@/lib/context';
 import { UserRole, ROLE_LABELS } from '@/lib/types';
-import DirectoryMap from '@/components/DirectoryMap';
 import { apiRequest, getApiUrl } from '@/lib/query-client';
 
 // Light Theme Design Tokens
@@ -74,6 +73,16 @@ const ROLE_SUBTITLE: Record<string, string> = {
   customer:     'Customer',
   admin:        'Administrator',
 };
+
+/** Parse API latitude/longitude without treating 0 as "missing". */
+function parseCoord(v: unknown): number | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  const s = String(v).trim();
+  if (s === '') return null;
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : null;
+}
 
 function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371;
@@ -355,7 +364,6 @@ function ProfCard({ item, currentUserId, isAdmin, onChat, onPress, onRefresh }: 
 
 export default function DirectoryScreen() {
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ view?: string }>();
   const { allProfiles, profile, startConversation, refreshData, hasMoreProfiles, loadMoreProfiles } = useApp();
   const isCustomer = profile?.role === 'customer';
   const [search, setSearch]         = useState('');
@@ -363,13 +371,10 @@ export default function DirectoryScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMoreProfs, setLoadingMoreProfs] = useState(false);
   const [stats, setStats]           = useState<OnlineStats | null>(null);
-  const [viewMode, setViewMode]     = useState<'list' | 'map'>(params.view === 'map' ? 'map' : 'list');
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
 
   const topPad = (Platform.OS === 'web' ? 67 : insets.top) + 12;
-
-  useEffect(() => { if (params.view === 'map') setViewMode('map'); }, [params.view]);
 
   // Start continuous location tracking
   useEffect(() => {
@@ -420,8 +425,8 @@ export default function DirectoryScreen() {
       city: p.city || '', skills: Array.isArray(p.skills) ? p.skills : [],
       avatar: p.avatar || '',
       isOnline: !!(p as any).lastSeen && now - (p as any).lastSeen < THR,
-      latitude:  (p as any).latitude  ? parseFloat((p as any).latitude)  : null,
-      longitude: (p as any).longitude ? parseFloat((p as any).longitude) : null,
+      latitude: parseCoord((p as any).latitude),
+      longitude: parseCoord((p as any).longitude),
       locationSharing: (p as any).locationSharing,
       rating:       p.rating ?? '0',
       ratingCount:  p.ratingCount ?? '0',
@@ -476,34 +481,11 @@ export default function DirectoryScreen() {
     setLoadingMoreProfs(false);
   }, [hasMoreProfiles, loadingMoreProfs, search, roleFilter, loadMoreProfiles]);
 
-  const mapProfiles = useMemo(() => filtered.filter(p => p.latitude && p.longitude && !isNaN(p.latitude!) && !isNaN(p.longitude!) && (p.role !== 'customer' || p.locationSharing === 'true')).map(p => ({ id: p.id, latitude: p.latitude!, longitude: p.longitude!, name: p.name, role: ROLE_LABELS[p.role] || p.role, roleKey: p.role, city: p.city, skills: p.skills, color: ROLE_MAP_COLORS[p.role] || '#1D4ED8', avatar: p.avatar, isOnline: p.isOnline, lastSeen: 0 })), [filtered]);
   const locationStatus = userLocation
     ? 'Location enabled'
     : locationError || 'Location not available';
 
-  const handleMapChat = useCallback(async (id: string) => {
-    const p = allProfiles.find(p => p.id === id);
-    if (p) { const c = await startConversation(p.id, p.name, p.role); if (c) router.push({ pathname: '/chat/[id]', params: { id: c } }); }
-  }, [allProfiles, startConversation]);
-
   const onRefresh = async () => { setRefreshing(true); await Promise.all([refreshData(), fetchStats()]); setRefreshing(false); };
-
-  if (viewMode === 'map') {
-    return (
-      <View style={{ flex: 1, backgroundColor: BG }}>
-        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 100, paddingTop: topPad, paddingHorizontal: 12, paddingBottom: 8, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(255,255,255,0.95)' }}>
-          <Pressable style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: PRIMARY, alignItems: 'center', justifyContent: 'center' }} onPress={() => setViewMode('list')}>
-            <Ionicons name="list" size={18} color="#FFF" />
-          </Pressable>
-          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: '#F3F4F6', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 8, gap: 8 }}>
-            <Ionicons name="search" size={16} color={GRAY} />
-            <TextInput style={{ flex: 1, fontSize: 14, color: DARK, padding: 0 }} placeholder="Search..." placeholderTextColor={GRAY} value={search} onChangeText={setSearch} />
-          </View>
-        </View>
-        <DirectoryMap markers={mapProfiles} onMarkerPress={(id) => router.push({ pathname: '/user-profile', params: { id } })} onChatPress={handleMapChat} />
-      </View>
-    );
-  }
 
   return (
     <View style={styles.container}>
@@ -521,7 +503,7 @@ export default function DirectoryScreen() {
               onChangeText={setSearch}
             />
           </View>
-          <Pressable style={styles.mapBtn} onPress={() => setViewMode('map')}>
+          <Pressable style={styles.mapBtn} onPress={() => router.push('/map')}>
             <Ionicons name="map-outline" size={16} color={PRIMARY} />
           </Pressable>
         </View>
@@ -574,8 +556,16 @@ export default function DirectoryScreen() {
               }
             }}
             onChat={item.id !== profile?.id && item.role !== 'customer' ? async () => {
-              const c = await startConversation(item.id, item.name, item.role);
-              if (c) router.push({ pathname: '/chat/[id]', params: { id: c } });
+              try {
+                const c = await startConversation(item.id, item.name, item.role);
+                if (c) {
+                  router.push({ pathname: '/chat/[id]', params: { id: c } });
+                } else {
+                  Alert.alert('Chat', 'Could not start a conversation. Check your connection and try again.');
+                }
+              } catch (e: any) {
+                Alert.alert('Chat', e?.message || 'Could not open chat.');
+              }
             } : undefined}
           />);
         }}

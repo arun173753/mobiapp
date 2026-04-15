@@ -708,29 +708,25 @@ export default function SupplierProductsScreen() {
             )}
 
             {Platform.OS === 'web' ? (
-              <button
-                onClick={handleThumbnailUpload}
+              <Pressable
+                onPress={handleThumbnailUpload}
                 disabled={uploadingThumbnail}
-                style={{
-                  backgroundColor: PRIMARY,
-                  color: '#FFF',
-                  border: 'none',
-                  padding: '12px 16px',
-                  borderRadius: '10px',
-                  fontSize: '14px',
-                  fontWeight: '600',
-                  fontFamily: 'Inter',
-                  width: '100%',
-                  cursor: uploadingThumbnail ? 'not-allowed' : 'pointer',
-                  opacity: uploadingThumbnail ? 0.6 : 1,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                } as any}
+                style={[
+                  styles.uploadThumbnailBtn,
+                  uploadingThumbnail && { opacity: 0.6 },
+                  // React Native Web supports cursor in style
+                  ({ cursor: uploadingThumbnail ? 'not-allowed' : 'pointer' } as any),
+                ]}
               >
-                📤 Upload New Thumbnail
-              </button>
+                {uploadingThumbnail ? (
+                  <ActivityIndicator size="small" color="#FFF" />
+                ) : (
+                  <>
+                    <Ionicons name="cloud-upload-outline" size={18} color="#FFF" />
+                    <Text style={styles.uploadThumbnailText}>Upload New Thumbnail</Text>
+                  </>
+                )}
+              </Pressable>
             ) : (
               <TouchableOpacity
                 style={[styles.uploadThumbnailBtn, uploadingThumbnail && { opacity: 0.6 }]}

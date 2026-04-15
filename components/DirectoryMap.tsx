@@ -1,8 +1,12 @@
-import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
+import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react';
+import {
+  View, Text, StyleSheet, Pressable, Animated, ActivityIndicator, Platform, Alert,
+} from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Marker, PROVIDER_DEFAULT, Region } from 'react-native-maps';
+import Constants from 'expo-constants';
+import MapView, { Marker, PROVIDER_DEFAULT, PROVIDER_GOOGLE, Region } from 'react-native-maps';
+import * as Location from 'expo-location';
 
 export interface MapMarkerData {
   id: string;
@@ -19,10 +23,22 @@ export interface MapMarkerData {
   lastSeen?: number;
 }
 
-interface DirectoryMapProps {
+export type MapLatLngBoundsLiteral = {
+  north: number;
+  south: number;
+  east: number;
+  west: number;
+};
+
+export interface DirectoryMapProps {
   markers: MapMarkerData[];
   onMarkerPress?: (id: string) => void;
-  onChatPress?: (id: string) => void;
+  /** Return a Promise so the map can show a spinner until navigation completes. */
+  onChatPress?: (id: string) => void | Promise<void>;
+  /** Web: debounced map idle — use for bounds-based API / Firestore loads. */
+  onMapBoundsChange?: (bounds: MapLatLngBoundsLiteral, zoom: number) => void;
+  /** When true, native map disables the Chat action and shows a spinner. */
+  isChatOpening?: boolean;
 }
 
 const INDIA_CENTER = {
@@ -35,9 +51,10 @@ const INDIA_CENTER = {
 const ZOOM_THRESHOLD_DELTA = 3;
 
 const ROLE_COLORS_LEGEND = [
-  { role: 'Technician', color: '#34C759' },
-  { role: 'Teacher', color: '#FFD60A' },
-  { role: 'Supplier', color: '#FF6B2C' },
+  { role: 'Technician', color: '#22C55E' },
+  { role: 'Teacher', color: '#EAB308' },
+  { role: 'Supplier', color: '#2563EB' },
+  { role: 'Shopkeeper', color: '#EF4444' },
 ];
 
 function getInitials(name: string) {
@@ -57,10 +74,23 @@ function getTimeAgo(ts?: number) {
 }
 
 const DotMarker = React.memo(function DotMarker({ marker }: { marker: MapMarkerData }) {
+  const pulse = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 0.45, duration: 700, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 1, duration: 700, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
   return (
-    <View style={[styles.dotMarker, { backgroundColor: marker.color }]}>
-      {marker.isOnline && <View style={styles.dotOnline} />}
-    </View>
+    <Animated.View style={{ opacity: pulse, transform: [{ scale: pulse }] }}>
+      <View style={[styles.dotMarker, { backgroundColor: marker.color }]}>
+        {marker.isOnline && <View style={styles.dotOnline} />}
+      </View>
+    </Animated.View>
   );
 });
 
@@ -79,20 +109,70 @@ const AvatarMarker = React.memo(function AvatarMarker({ marker }: { marker: MapM
   );
 });
 
-export default function DirectoryMap({ markers, onMarkerPress, onChatPress }: DirectoryMapProps) {
+export default function DirectoryMap({
+  markers,
+  onMarkerPress,
+  onChatPress,
+  isChatOpening,
+}: DirectoryMapProps) {
   const [selected, setSelected] = useState<MapMarkerData | null>(null);
   const [isZoomedIn, setIsZoomedIn] = useState(false);
   const [mapReady, setMapReady] = useState(false);
+  const mapRef = useRef<MapView>(null);
+  const [myCoords, setMyCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [locLoading, setLocLoading] = useState(false);
+
+  const mapsKey = useMemo(() => {
+    const k = (Constants.expoConfig?.android?.config as any)?.googleMaps?.apiKey || '';
+    return String(k || '');
+  }, []);
+  const likelyMissingKey = mapsKey.includes('YOUR_GOOGLE_MAPS_API_KEY_HERE') || !mapsKey.trim();
 
   const handleRegionChange = useCallback((region: Region) => {
     setIsZoomedIn(region.latitudeDelta < ZOOM_THRESHOLD_DELTA);
   }, []);
 
+  const goToMyLocation = useCallback(async () => {
+    setLocLoading(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Location', 'Permission is required to show your position on the map.');
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Highest,
+      });
+      const { latitude, longitude } = pos.coords;
+      setMyCoords({ latitude, longitude });
+      mapRef.current?.animateToRegion(
+        {
+          latitude,
+          longitude,
+          latitudeDelta: 0.06,
+          longitudeDelta: 0.06,
+        },
+        500,
+      );
+    } catch (e: any) {
+      Alert.alert('Location', e?.message || 'Could not read GPS.');
+    } finally {
+      setLocLoading(false);
+    }
+  }, []);
+
   return (
     <View style={styles.container}>
       <MapView
+        ref={mapRef}
         style={styles.map}
-        provider={PROVIDER_DEFAULT}
+        // Avoid hard-crashing on Android when Google Maps key isn't embedded in the APK/AAB.
+        // Fall back to default provider so the screen still renders (with a warning banner).
+        provider={(
+          Constants.platform?.android && !likelyMissingKey
+            ? PROVIDER_GOOGLE
+            : PROVIDER_DEFAULT
+        ) as any}
         initialRegion={INDIA_CENTER}
         showsUserLocation={false}
         showsMyLocationButton={false}
@@ -114,7 +194,30 @@ export default function DirectoryMap({ markers, onMarkerPress, onChatPress }: Di
             {isZoomedIn ? <AvatarMarker marker={p} /> : <DotMarker marker={p} />}
           </Marker>
         ))}
+        {myCoords && (
+          <Marker coordinate={myCoords} title="You are here" pinColor="#2563EB" />
+        )}
       </MapView>
+
+      <Pressable
+        style={[styles.myLocBtn, locLoading && { opacity: 0.7 }]}
+        onPress={goToMyLocation}
+        disabled={locLoading}
+        accessibilityLabel="Center map on my location"
+      >
+        {locLoading ? (
+          <ActivityIndicator size="small" color="#111827" />
+        ) : (
+          <Ionicons name="locate" size={22} color="#111827" />
+        )}
+      </Pressable>
+
+      {mapReady && likelyMissingKey && (
+        <View style={styles.mapsKeyBanner} pointerEvents="none">
+          <Ionicons name="warning-outline" size={14} color="#92400E" />
+          <Text style={styles.mapsKeyBannerText}>Google Maps key missing — map may be blank in APK.</Text>
+        </View>
+      )}
 
       {!selected && mapReady && (
         <View style={styles.legend}>
@@ -170,10 +273,23 @@ export default function DirectoryMap({ markers, onMarkerPress, onChatPress }: Di
               <Text style={styles.btnProfileText}>Profile</Text>
             </Pressable>
             <Pressable
-              style={styles.btnChat}
-              onPress={() => { setSelected(null); onChatPress?.(selected.id); }}
+              style={[styles.btnChat, (isChatOpening) && { opacity: 0.65 }]}
+              disabled={!!isChatOpening}
+              onPress={async () => {
+                const id = selected.id;
+                try {
+                  await onChatPress?.(id);
+                  setSelected(null);
+                } catch (e: any) {
+                  Alert.alert('Chat', e?.message || 'Could not open chat.');
+                }
+              }}
             >
-              <Text style={styles.btnChatText}>Chat</Text>
+              {isChatOpening ? (
+                <ActivityIndicator size="small" color="#000" />
+              ) : (
+                <Text style={styles.btnChatText}>Chat</Text>
+              )}
             </Pressable>
           </View>
         </View>
@@ -185,6 +301,27 @@ export default function DirectoryMap({ markers, onMarkerPress, onChatPress }: Di
 const styles = StyleSheet.create({
   container: { flex: 1 },
   map: { flex: 1 },
+  mapsKeyBanner: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    right: 12,
+    backgroundColor: '#FFFBEB',
+    borderColor: '#F59E0B',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  mapsKeyBannerText: {
+    color: '#92400E',
+    fontSize: 12,
+    fontWeight: '600',
+    flex: 1,
+  },
   dotMarker: {
     width: 14,
     height: 14,
@@ -239,6 +376,24 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#FFF',
   },
+  myLocBtn: {
+    position: 'absolute',
+    bottom: 100,
+    right: 14,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.1)',
+    zIndex: 25,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 6 },
+      android: { elevation: 4 },
+    }),
+  },
   legend: {
     position: 'absolute',
     bottom: 100,
@@ -282,15 +437,17 @@ const styles = StyleSheet.create({
   },
   userCard: {
     position: 'absolute',
-    bottom: 100,
-    left: 12,
-    right: 12,
+    bottom: 96,
+    left: 10,
+    right: 10,
     backgroundColor: 'rgba(28,28,30,0.96)',
-    borderRadius: 16,
-    padding: 14,
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 10,
+    maxHeight: 118,
   },
   closeBtn: {
     position: 'absolute',
@@ -300,10 +457,10 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   cardAvatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    borderWidth: 3,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 2,
     overflow: 'hidden',
     backgroundColor: '#444',
   },
@@ -330,47 +487,48 @@ const styles = StyleSheet.create({
   },
   cardName: {
     color: '#FFF',
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '700',
-    marginBottom: 2,
+    marginBottom: 1,
   },
   cardRole: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '600',
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 2,
+    letterSpacing: 0.4,
+    marginBottom: 1,
   },
   cardMeta: {
     color: '#AAA',
-    fontSize: 12,
+    fontSize: 11,
   },
   cardActions: {
     flexDirection: 'column',
-    gap: 6,
+    gap: 5,
   },
   btnProfile: {
     backgroundColor: 'rgba(255,255,255,0.15)',
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     alignItems: 'center',
   },
   btnProfileText: {
     color: '#FFF',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
   },
   btnChat: {
     backgroundColor: '#FFD60A',
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     alignItems: 'center',
+    minWidth: 72,
   },
   btnChatText: {
     color: '#000',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
   },
 });

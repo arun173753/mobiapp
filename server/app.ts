@@ -2,7 +2,7 @@ import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { startEmailScheduler } from "./lib/emailScheduler";
-import { fixDbUrl } from "./db";
+import { fixDbUrl, verifyDatabaseConnection } from "./db";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -25,7 +25,7 @@ function setupCors(app: express.Application) {
     const origin = req.get("origin");
     const allowedMethods = "GET, POST, PUT, DELETE, PATCH, OPTIONS";
     const allowedHeaders =
-      "Content-Type, x-session-token, expo-platform, x-requested-with, Authorization";
+      "Content-Type, x-session-token, expo-platform, x-requested-with, Authorization, Accept";
 
     // Always allow CORS requests from known good origins and patterns
     // Permissive in development, restrictive in production if needed
@@ -72,17 +72,20 @@ function setupCors(app: express.Application) {
 function setupBodyParsing(app: express.Application) {
   app.use(
     express.json({
-      limit: "500mb",
+      limit: "200mb",
       verify: (req, _res, buf) => {
         req.rawBody = buf;
       },
     })
   );
-  app.use(express.urlencoded({ extended: false, limit: "500mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "200mb" }));
 }
 
 function setupRequestLogging(app: express.Application) {
   app.use((req, res, next) => {
+    if (req.path.startsWith("/api")) {
+      log(`[req] ${req.method} ${req.originalUrl || req.url}`);
+    }
     const start = Date.now();
     const path = req.path;
     let capturedJsonResponse: Record<string, unknown> | undefined = undefined;
@@ -289,13 +292,16 @@ function setupErrorHandler(app: express.Application) {
     const status = error.status || error.statusCode || 500;
     const message = error.message || "Internal Server Error";
 
-    console.error("Internal Server Error:", err);
+    console.error("Internal Server Error:", err instanceof Error ? err.stack : err);
 
     if (res.headersSent) {
       return next(err);
     }
 
-    return res.status(status).json({ message });
+    return res.status(status).json({
+      error: status >= 500 ? "Internal server error" : "Request error",
+      message,
+    });
   });
 }
 
@@ -352,6 +358,11 @@ async function runStartupMigrations() {
     await pool.query(`ALTER TABLE profiles ADD COLUMN IF NOT EXISTS banner_image TEXT DEFAULT ''`);
     await pool.query(`ALTER TABLE profiles ADD COLUMN IF NOT EXISTS shop_thumbnail TEXT DEFAULT ''`);
     await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS thumbnail TEXT DEFAULT ''`);
+    await pool.query(
+      `ALTER TABLE posts ADD COLUMN IF NOT EXISTS views INTEGER NOT NULL DEFAULT 0`,
+    );
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS latitude TEXT DEFAULT ''`);
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS longitude TEXT DEFAULT ''`);
     await pool.end();
     log("Startup migration: tables ready");
   } catch (err) {
@@ -374,12 +385,18 @@ export async function createApp(): Promise<express.Application> {
 
     // Health check endpoint (before other routes)
     app.get('/health', (req, res) => {
-      res.status(200).json({ status: 'ok', timestamp: Date.now() });
+      res.status(200).json({ success: true });
     });
 
     configureExpoAndLanding(app);
 
     await runStartupMigrations();
+
+    try {
+      await verifyDatabaseConnection();
+    } catch (e) {
+      log("[DB] verifyDatabaseConnection failed — API may error until DB is reachable:", e);
+    }
 
     await registerRoutes(app);
     startEmailScheduler();

@@ -1,12 +1,18 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, ReactNode, useCallback, useRef } from 'react';
 import { Alert, AppState, Platform } from 'react-native';
 import * as Crypto from 'expo-crypto';
-import { fetch as expoFetch } from 'expo/fetch';
 import { ADMIN_PHONE, UserProfile, Post, Job, Comment, Conversation, ChatMessage, UserRole, PostCategory } from './types';
 import * as Storage from './storage';
 import { apiRequest, getApiUrl } from './query-client';
 import { playMessageSound, showMessageNotification, registerPushToken } from './notifications';
 import { getDeviceId } from './device-fingerprint';
+import {
+  subscribeFirebaseAuthState,
+  unsubscribeFirebaseAuthState,
+  getFirebaseAuth,
+  isFirebaseAvailable,
+} from './firebase';
+import { shouldScheduleLocalMessageBanner } from './onesignal';
 
 interface AppContextValue {
   profile: UserProfile | null;
@@ -269,6 +275,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     loadData();
   }, []);
 
+  useEffect(() => {
+    subscribeFirebaseAuthState();
+    return () => unsubscribeFirebaseAuthState();
+  }, []);
+
   // Poll live chat for new messages to track unread badge (replaces Socket.IO)
   useEffect(() => {
     if (!profile || !isOnboarded) return;
@@ -329,8 +340,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 if (!isFromMe && !isActiveChat) {
                   const otherIdx = convo.participantIds[0] === profile.id ? 1 : 0;
                   const senderName = convo.participantNames[otherIdx];
-                  playMessageSound();
-                  showMessageNotification(senderName, convo.lastMessage || '');
+                  void (async () => {
+                    const useLocalBanner = await shouldScheduleLocalMessageBanner();
+                    if (useLocalBanner) {
+                      playMessageSound();
+                      showMessageNotification(senderName, convo.lastMessage || '');
+                    }
+                  })();
                 }
               }
               lastConvoTimestamps.current[convo.id] = newTs;
@@ -355,7 +371,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const onboarded = await Storage.isOnboarded();
       const sessionToken = await Storage.getSessionToken();
 
+      try {
+        const auth = getFirebaseAuth();
+        console.log('User on start:', auth?.currentUser ?? null);
+      } catch {
+        /* Firebase may be disabled */
+      }
+
       if (savedProfile && onboarded && sessionToken) {
+        console.log('[Session] Restored from storage — user', savedProfile.id, 'token length', sessionToken.length);
         setProfileState(savedProfile);
         setIsOnboarded(true);
 
@@ -393,6 +417,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000))
         ]).catch(() => {});
       } else {
+        console.log('[Session] No persisted session', {
+          hasProfile: !!savedProfile,
+          onboarded,
+          hasToken: !!sessionToken,
+        });
         setIsOnboarded(false);
         setProfileState(null);
         setIsLoading(false);
@@ -532,29 +561,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const uploadLocalImage = useCallback(async (localUri: string): Promise<string | null> => {
     try {
       const baseUrl = getApiUrl();
-      const uploadUrl = new URL('/api/upload', baseUrl).toString();
-
+      const formData = new FormData();
       if (Platform.OS === 'web') {
         const response = await globalThis.fetch(localUri);
         const blob = await response.blob();
-        const formData = new FormData();
         formData.append('image', blob, 'chat-image.jpg');
-        const uploadRes = await globalThis.fetch(uploadUrl, { method: 'POST', body: formData });
-        const data = await uploadRes.json();
-        if (data.url) return new URL(data.url, baseUrl).toString();
-        return null;
       } else {
-        const formData = new FormData();
         formData.append('image', {
           uri: localUri,
           name: 'chat-image.jpg',
           type: 'image/jpeg',
         } as any);
-        const uploadRes = await expoFetch(uploadUrl, { method: 'POST', body: formData });
-        const data = await uploadRes.json();
-        if (data.url) return new URL(data.url, baseUrl).toString();
-        return null;
       }
+
+      const uploadRes = await apiRequest('POST', '/api/upload', formData, {
+        timeoutMs: 180000,
+        retries: 2,
+      });
+      const data = await uploadRes.json();
+      if (data.url) return new URL(data.url, baseUrl).toString();
+      return null;
     } catch (e) {
       console.warn('[Context] Image upload failed:', e);
       return null;
@@ -803,6 +829,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     try {
+      if (isFirebaseAvailable()) {
+        const auth = getFirebaseAuth();
+        if (auth) {
+          const { signOut } = await import('firebase/auth');
+          await signOut(auth);
+          console.log('[Logout] Firebase signOut OK');
+        }
+      }
+    } catch (e) {
+      console.warn('[Logout] Firebase signOut:', e);
+    }
+    try {
+      try {
+        const { logoutOneSignal } = await import('./notifications');
+        logoutOneSignal();
+      } catch {
+        /* ignore */
+      }
       await Storage.clearAll();
       setProfileState(null);
       setPosts([]);

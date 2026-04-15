@@ -1,153 +1,103 @@
-import { fetch as _expoFetch } from "expo/fetch";
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
-import Constants from "expo-constants";
-import { Platform } from "react-native";
-import {
-  DEFAULT_PRODUCTION_API_ORIGIN,
-  isUnusableProductionApiOrigin,
-  normalizeApiOrigin,
-} from "@/lib/api-base";
+import { apiRequestRaw } from "@/lib/api-client";
 import { clearSessionToken, getSessionToken } from "@/lib/storage";
 
-// On web use native browser fetch so custom headers (x-session-token) are
-// always sent reliably. expo/fetch on deployed web builds can silently drop them.
-const fetch: typeof _expoFetch = Platform.OS === "web" && typeof globalThis.fetch === "function"
-  ? (globalThis.fetch as any)
-  : _expoFetch;
-
-/** True when the web app is served from Firebase Hosting (not localhost dev). */
-function isFirebaseHostedWeb(): boolean {
-  if (Platform.OS !== "web" || typeof window === "undefined") return false;
-  const h = window.location.hostname.toLowerCase();
-  return h.endsWith(".web.app") || h.endsWith(".firebaseapp.com");
-}
-
-export function getApiUrl(): string {
-  const dev = typeof __DEV__ !== "undefined" && __DEV__;
-
-  // Firebase Hosting: never trust a dev-machine .env that inlined api.example.com / localhost.
-  if (isFirebaseHostedWeb()) {
-    const extra = Constants.expoConfig?.extra as { publicApiUrl?: string } | undefined;
-    const fromExtra = normalizeApiOrigin(extra?.publicApiUrl);
-    if (fromExtra && !isUnusableProductionApiOrigin(fromExtra)) {
-      return fromExtra;
-    }
-    return DEFAULT_PRODUCTION_API_ORIGIN;
-  }
-
-  // API base only — do NOT use EXPO_PUBLIC_DOMAIN here (it is often the web app URL, e.g. *.web.app).
-  const envCandidates = [
-    process.env.EXPO_PUBLIC_API_URL,
-    process.env.VITE_API_URL,
-    process.env.REACT_APP_API_URL,
-  ];
-  for (const raw of envCandidates) {
-    const n = normalizeApiOrigin(raw);
-    if (!n) continue;
-    if (isUnusableProductionApiOrigin(n)) continue;
-    if (dev) console.log("[getApiUrl] Using env API URL:", n);
-    return n;
-  }
-
-  const extra = Constants.expoConfig?.extra as { publicApiUrl?: string } | undefined;
-  const fromExtra = normalizeApiOrigin(extra?.publicApiUrl);
-  if (fromExtra && !isUnusableProductionApiOrigin(fromExtra)) {
-    return fromExtra;
-  }
-
-  if (dev) {
-    console.warn(
-      "[getApiUrl] Set EXPO_PUBLIC_API_URL in .env — defaulting to http://127.0.0.1:5000",
-    );
-    return "http://127.0.0.1:5000";
-  }
-  return DEFAULT_PRODUCTION_API_ORIGIN;
-}
+export { getApiUrl } from "@/lib/api-base";
+export { API_URL } from "@/lib/api-config";
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
     try {
+      // Surface server error payloads in console for easier debugging on Hosting.
+      const ct = (res.headers.get("content-type") || "").toLowerCase();
+      const isJson = ct.includes("application/json") || text.trim().startsWith("{") || text.trim().startsWith("[");
+      const parsed = isJson ? JSON.parse(text) : null;
+      if (parsed && typeof parsed === "object") {
+        const errorId = (parsed as any)?.errorId;
+        const detail = (parsed as any)?.detail || (parsed as any)?.message || (parsed as any)?.error;
+        console.error("[API] Non-OK response payload:", {
+          status: res.status,
+          errorId: typeof errorId === "string" ? errorId : undefined,
+          detail: typeof detail === "string" ? detail.slice(0, 800) : undefined,
+        });
+      } else {
+        console.error("[API] Non-OK response text:", { status: res.status, text: String(text).slice(0, 800) });
+      }
+    } catch (e) {
+      console.error("[API] Non-OK response (parse failed):", { status: res.status });
+    }
+    try {
       const json = JSON.parse(text);
-      const msg = json.message || json.error || text;
-      throw new Error(msg);
+      let msg = String(json.message || json.detail || json.error || "").trim();
+      if (!msg) msg = text;
+      if (typeof json.bunnyError === "string" && json.bunnyError.trim()) {
+        msg = `${msg || "Request failed"} — ${String(json.bunnyError).slice(0, 600)}`;
+      }
+      throw new Error(typeof msg === "string" ? msg : text);
     } catch (e: any) {
-      if (e.message && !e.message.includes('JSON')) throw e;
+      if (e.message && !e.message.includes("JSON")) throw e;
       throw new Error(text || `Request failed (${res.status})`);
     }
   }
 }
 
+/** Optional tuning for slow routes (uploads, Bunny, large JSON). */
+export type ApiRequestOptions = {
+  timeoutMs?: number;
+  /** Extra attempts after the first (default 3 retries = 4 tries total). */
+  retries?: number;
+  /** Skip GET /health probe (e.g. if you already verified reachability). */
+  skipReachability?: boolean;
+};
+
+const DEFAULT_API_TIMEOUT_MS = 60_000;
+const DEFAULT_RETRIES = 2;
+
 export async function apiRequest(
   method: string,
   route: string,
   data?: unknown | undefined,
+  options?: ApiRequestOptions,
 ): Promise<Response> {
-  const baseUrl = getApiUrl();
-  const url = new URL(route, baseUrl);
+  const timeoutMs = options?.timeoutMs ?? Math.max(DEFAULT_API_TIMEOUT_MS, 120_000);
+  const retries = options?.retries ?? DEFAULT_RETRIES;
+  const skipReachability = options?.skipReachability;
 
-  const isFormData = data instanceof FormData;
   const sessionToken = (await getSessionToken())?.trim() || null;
 
-  const headers: Record<string, string> = {};
-  if (!isFormData && data) headers["Content-Type"] = "application/json";
-  if (sessionToken) headers["x-session-token"] = sessionToken;
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout for production
-  
-  const fetchOptions = {
-    method,
-    headers,
-    body: isFormData ? (data as any) : (data ? JSON.stringify(data) : undefined),
-    signal: controller.signal,
-  };
-
-  if (Platform.OS === "web") {
-    // Removed credentials: "include" as it was causing 401 Invalid Session errors on web 
-    // when the browser doesn't have the session cookie, but we are manually sending 
-    // the x-session-token header.
-  }
-
-  if (__DEV__) console.log('[API Request]', method, url.toString(), 'Platform:', Platform.OS);
-  
-  let res: Response;
-  try {
-    res = await fetch(url.toString(), fetchOptions);
-    clearTimeout(timeoutId);
-    if (__DEV__) console.log('[API Response]', route, 'Status:', res.status, 'OK:', res.ok);
-  } catch (error: any) {
-    clearTimeout(timeoutId);
-    if (error.name === 'AbortError') {
-      throw new Error(`Request timeout on ${route} (15s)`);
-    }
-    console.error('[API Fetch Error]', route, 'Error:', error.message);
-    throw new Error(`Network error on ${route}: ${error.message}`);
-  }
+  const res = await apiRequestRaw(method, route, data, {
+    timeoutMs,
+    retries,
+    skipReachability,
+  });
 
   if (
     res.status === 401 &&
     sessionToken &&
-    !route.includes('/api/otp/') &&
-    !route.includes('/api/auth/')
+    !route.includes("/api/otp/") &&
+    !route.includes("/api/auth/")
   ) {
-    if (__DEV__) console.log('[API] 401 Unauthorized for', route);
+    if (__DEV__) console.log("[API] 401 Unauthorized for", route);
     try {
       const cloned = res.clone();
       const body = await cloned.json();
       const msg = body?.message || body?.error;
       if (
-        msg === 'Invalid session' ||
-        msg === 'Authentication required' ||
-        msg === 'Unauthorized: Session token required'
+        msg === "Invalid session" ||
+        msg === "Authentication required" ||
+        msg === "Unauthorized: Session token required"
       ) {
         await clearSessionToken();
-        if (__DEV__) console.log('[API] Cleared stale session token');
+        if (__DEV__) console.log("[API] Cleared stale session token");
       }
-    } catch {}
+    } catch {
+      /* ignore */
+    }
   }
 
   await throwIfResNotOk(res);
+  if (__DEV__) console.log("[API Response]", route, "Status:", res.status, "OK:", res.ok);
   return res;
 }
 
@@ -157,22 +107,38 @@ export const getQueryFn: <T>(options: {
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
-    const baseUrl = getApiUrl();
-    const url = new URL(queryKey.join("/") as string, baseUrl);
-
+    const path = queryKey.join("/") as string;
     const sessionToken = (await getSessionToken())?.trim() || null;
-    const headers: Record<string, string> = {};
-    if (sessionToken) headers["x-session-token"] = sessionToken;
 
-    const fetchOptions = { headers };
-    if (Platform.OS === "web") {
-      // Removed credentials: "include" to match apiRequest behavior
-    }
-
-    const res = await fetch(url.toString(), fetchOptions);
+    const res = await apiRequestRaw("GET", path, undefined, {
+      timeoutMs: DEFAULT_API_TIMEOUT_MS,
+      retries: DEFAULT_RETRIES,
+    });
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       return null;
+    }
+
+    if (
+      res.status === 401 &&
+      sessionToken &&
+      !path.includes("/api/otp/") &&
+      !path.includes("/api/auth/")
+    ) {
+      try {
+        const cloned = res.clone();
+        const body = await cloned.json();
+        const msg = body?.message || body?.error;
+        if (
+          msg === "Invalid session" ||
+          msg === "Authentication required" ||
+          msg === "Unauthorized: Session token required"
+        ) {
+          await clearSessionToken();
+        }
+      } catch {
+        /* ignore */
+      }
     }
 
     await throwIfResNotOk(res);

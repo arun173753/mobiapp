@@ -268,6 +268,10 @@ function LeadCard({ lead, onBuy, buying, index, userLocation }: { lead: Lead; on
                 <Ionicons name={expanded ? 'chevron-up' : 'information-circle-outline'} size={16} color={ORANGE} />
                 <Text style={styles.detailsBtnText}>{expanded ? 'Less Details' : 'View Details'}</Text>
               </Pressable>
+              <View style={styles.lockRow}>
+                <Ionicons name="lock-closed-outline" size={14} color={TEXT_LIGHT} />
+                <Text style={styles.lockText}>Unlock ₹{price} to view phone</Text>
+              </View>
               <Pressable
                 style={[styles.buyBtn, (buying || isFull) && styles.buyBtnDisabled]}
                 onPress={() => { if (!isFull) onBuy(lead); }}
@@ -278,7 +282,7 @@ function LeadCard({ lead, onBuy, buying, index, userLocation }: { lead: Lead; on
                 ) : (
                   <>
                     <Ionicons name={isFull ? 'lock-closed' : 'lock-open-outline'} size={15} color="#fff" />
-                    <Text style={styles.buyBtnText}>{isFull ? 'Sold Out' : `Get Lead ₹${price}`}</Text>
+                    <Text style={styles.buyBtnText}>{isFull ? 'Sold Out' : `Unlock ₹${price}`}</Text>
                   </>
                 )}
               </Pressable>
@@ -365,7 +369,8 @@ export default function LeadsScreen() {
     queryKey: ['/api/leads', selectedCategory, sort, profile?.id],
     queryFn: async () => {
       const res = await apiRequest('GET', `/api/leads?category=${selectedCategory}&sort=${sort}`);
-      return normalizeLeadsPayload(await res.json());
+      const payload = normalizeLeadsPayload(await res.json());
+      return payload;
     },
     enabled: activeTab === 'box' && canAccessLeads,
     staleTime: 20000,

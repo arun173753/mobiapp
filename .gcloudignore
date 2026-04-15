@@ -12,7 +12,6 @@ node_modules/
 dist/
 build/
 web-build/
-server_dist/
 static-build/
 public/
 *.tsbuildinfo

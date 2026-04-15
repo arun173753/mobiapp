@@ -1,352 +1,567 @@
-import React, { useEffect, useRef, useMemo } from 'react';
-import { View, StyleSheet } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, StyleSheet, Pressable, ActivityIndicator, Platform } from 'react-native';
+import { Image } from 'expo-image';
+import { Ionicons } from '@expo/vector-icons';
+import Constants from 'expo-constants';
+import type { DirectoryMapProps, MapMarkerData, MapLatLngBoundsLiteral } from './DirectoryMap';
+import { loadGoogleMaps, resolveGoogleMapsMapConstructor } from '@/src/utils/googleMapsLoader';
 
-export interface MapMarkerData {
-  id: string;
-  latitude: number;
-  longitude: number;
-  name: string;
-  role: string;
-  roleKey: string;
-  city?: string;
-  skills?: string[];
-  color: string;
-  avatar?: string;
-  isOnline: boolean;
-  lastSeen?: number;
+export type { MapMarkerData, MapLatLngBoundsLiteral };
+
+const MAX_MARKERS = 150;
+const IDLE_DEBOUNCE_MS = 400;
+const INDIA = { lat: 20.5937, lng: 78.9629 };
+const PLACEHOLDER_MAPS_KEY = 'YOUR_GOOGLE_MAPS_API_KEY_HERE';
+
+function isUnusableGoogleMapsKey(k: string) {
+  const t = String(k || '').trim();
+  return !t || t.includes(PLACEHOLDER_MAPS_KEY);
 }
 
-interface DirectoryMapProps {
-  markers: MapMarkerData[];
-  onMarkerPress?: (id: string) => void;
-  onChatPress?: (id: string) => void;
+/*
+ * Bounds-based loading (e.g. Firestore): pass `onMapBoundsChange` from the parent.
+ * Example (simplified — production apps often use geohash or a geoquery library):
+ *
+ *   onMapBoundsChange={(b, zoom) => {
+ *     const q = query(
+ *       collection(db, 'profiles'),
+ *       where('lat', '>=', b.south),
+ *       where('lat', '<=', b.north),
+ *     );
+ *     getDocs(q).then((snap) => { ... merge into markers state, cap at 150 ... });
+ *   }}
+ */
+
+function pointInBounds(lat: number, lng: number, bounds: google.maps.LatLngBounds): boolean {
+  const maps = typeof window !== 'undefined' ? window.google?.maps : undefined;
+  if (!maps) return false;
+  return bounds.contains(new maps.LatLng(lat, lng));
 }
 
-function getMapHTML() {
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: 'Inter', sans-serif; overflow: hidden; }
-  #map { width: 100%; height: 100vh; }
+function toBoundsLiteral(bounds: google.maps.LatLngBounds): MapLatLngBoundsLiteral {
+  const ne = bounds.getNorthEast();
+  const sw = bounds.getSouthWest();
+  return {
+    north: ne.lat(),
+    east: ne.lng(),
+    south: sw.lat(),
+    west: sw.lng(),
+  };
+}
 
-  .leaflet-control-zoom { border: none !important; box-shadow: 0 2px 12px rgba(0,0,0,0.1) !important; border-radius: 12px !important; overflow: hidden; }
-  .leaflet-control-zoom a {
-    background: rgba(255,255,255,0.95) !important; color: #333 !important; border: none !important;
-    width: 36px !important; height: 36px !important; line-height: 36px !important; font-size: 18px !important;
-    border-bottom: 1px solid rgba(0,0,0,0.06) !important;
-  }
-  .leaflet-control-zoom a:last-child { border-bottom: none !important; }
-  .leaflet-control-attribution { display: none !important; }
-  .leaflet-popup-content-wrapper { border-radius: 0 !important; background: transparent !important; box-shadow: none !important; }
-  .leaflet-popup-content { margin: 0 !important; }
-  .leaflet-popup-tip-container { display: none !important; }
+function getInitials(name: string) {
+  return name
+    .split(' ')
+    .map((w) => w[0])
+    .join('')
+    .substring(0, 2)
+    .toUpperCase();
+}
 
-  .avatar-marker {
-    width: 44px; height: 44px; border-radius: 50%; border: 3px solid;
-    background-size: cover; background-position: center; background-color: #ddd;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-    cursor: pointer; position: relative;
-    transition: transform 0.2s ease, opacity 0.2s ease;
-  }
-  .avatar-marker.online::after {
-    content: ''; position: absolute; bottom: -2px; right: -2px;
-    width: 12px; height: 12px; border-radius: 50%;
-    background: #00E676; border: 2px solid #fff;
-  }
-  .avatar-marker .initials {
-    width: 100%; height: 100%; display: flex; align-items: center;
-    justify-content: center; color: white; font-weight: 800;
-    font-size: 14px; border-radius: 50%;
-  }
+function resolveAvatarUrl(raw: string | undefined) {
+  if (!raw) return '';
+  const u = String(raw).trim();
+  if (!u) return '';
+  if (/^https?:\/\//i.test(u)) return u;
+  const extra = Constants.expoConfig?.extra as { publicApiUrl?: string } | undefined;
+  const base = (extra?.publicApiUrl || '').replace(/\/+$/, '');
+  if (!base) return u;
+  return `${base}${u.startsWith('/') ? '' : '/'}${u}`;
+}
 
-  .dot-marker {
-    width: 14px; height: 14px; border-radius: 50%; border: 2px solid #fff;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.3);
-    cursor: pointer; position: relative;
-  }
-  .dot-marker.online::after {
-    content: ''; position: absolute; bottom: -1px; right: -1px;
-    width: 6px; height: 6px; border-radius: 50%;
-    background: #00E676; border: 1px solid #fff;
-  }
+type AvatarIconCache = Map<string, Promise<string> | string>;
+const avatarIconCache: AvatarIconCache = new Map();
 
-  .my-location-btn {
-    position: fixed; bottom: 80px; right: 16px; z-index: 900;
-    width: 44px; height: 44px; border-radius: 50%;
-    background: rgba(255,255,255,0.95);
-    border: 1px solid rgba(0,0,0,0.08);
-    box-shadow: 0 2px 12px rgba(0,0,0,0.12);
-    cursor: pointer; display: flex; align-items: center; justify-content: center;
-  }
-  .my-location-btn svg { width: 20px; height: 20px; }
+function getAvatarIconDataUrl(avatarUrl: string, ringColor: string) {
+  const key = `${avatarUrl}__${ringColor}`;
+  const cached = avatarIconCache.get(key);
+  if (typeof cached === 'string') return Promise.resolve(cached);
+  if (cached) return cached as Promise<string>;
 
-  .user-card {
-    position: fixed; bottom: 60px; left: 12px; right: 12px;
-    max-width: 400px; margin: 0 auto;
-    background: rgba(255,255,255,0.97); backdrop-filter: blur(20px);
-    border-radius: 20px; padding: 14px 16px; display: none;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.15);
-    border: 1px solid rgba(0,0,0,0.08);
-    z-index: 9999;
-  }
-  .user-card.show { display: flex; flex-direction: row; align-items: center; gap: 12px; }
-
-  .card-avatar {
-    width: 48px; height: 48px; border-radius: 50%; border: 3px solid;
-    background-size: cover; background-position: center; background-color: #e8e8e8;
-    flex-shrink: 0;
-  }
-  .card-avatar .initials {
-    width: 100%; height: 100%; display: flex; align-items: center;
-    justify-content: center; color: white; font-weight: 800;
-    font-size: 18px; border-radius: 50%;
-  }
-  .card-info { flex: 1; min-width: 0; }
-  .card-name { color: #1a1a2e; font-size: 15px; font-weight: 700; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .card-role { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; display: inline-block; padding: 2px 6px; border-radius: 4px; }
-  .card-meta { color: #888; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .card-online-badge { display: inline-flex; align-items: center; gap: 3px; color: #00c853; font-weight: 600; }
-  .card-online-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #00E676; }
-
-  .card-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
-  .card-btn { border: none; border-radius: 12px; padding: 10px 16px; font-size: 13px; font-weight: 700; cursor: pointer; min-height: 38px; touch-action: manipulation; -webkit-tap-highlight-color: rgba(0,0,0,0.1); }
-  .btn-chat { background: #FF2D55; color: #fff; }
-  .btn-profile { background: rgba(0,0,0,0.08); color: #333; }
-  .btn-close { position: absolute; top: 10px; right: 12px; background: rgba(0,0,0,0.06); border: none; color: #999; font-size: 16px; cursor: pointer; padding: 2px 7px; border-radius: 10px; line-height: 1; }
-</style>
-</head>
-<body>
-<div class="my-location-btn" onclick="requestMyLocation()">
-  <svg viewBox="0 0 24 24" fill="none" stroke="#333" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-    <circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/>
-    <line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/>
-  </svg>
-</div>
-<div id="map"></div>
-<div class="user-card" id="userCard">
-  <button class="btn-close" onclick="closeCard()">&times;</button>
-  <div class="card-avatar" id="cardAvatar"><div class="initials" id="cardInitials"></div></div>
-  <div class="card-info">
-    <div class="card-name" id="cardName"></div>
-    <div class="card-role" id="cardRole"></div>
-    <div class="card-meta" id="cardMeta"></div>
-  </div>
-  <div class="card-actions">
-    <button class="card-btn btn-profile" onclick="viewProfile()">Profile</button>
-    <button class="card-btn btn-chat" onclick="chatUser()">Chat</button>
-  </div>
-</div>
-<script>
-  var map = L.map('map', { zoomControl: false, attributionControl: false }).setView([20.5937, 78.9629], 5);
-  L.control.zoom({ position: 'bottomright' }).addTo(map);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-    subdomains: 'abcd', maxZoom: 19
-  }).addTo(map);
-
-  var markerLayer = L.layerGroup().addTo(map);
-  var selectedId = null;
-  var currentMarkers = [];
-  var ZOOM_THRESHOLD = 8;
-  var gradients = [
-    ['#FF6B6B','#EE5A24'],['#A29BFE','#6C5CE7'],['#55E6C1','#1ABC9C'],
-    ['#FFEAA7','#FDCB6E'],['#74B9FF','#0984E3'],['#FD79A8','#E84393'],
-    ['#E17055','#D63031'],['#00CEC9','#00B894'],['#FAB1A0','#E17055']
-  ];
-
-  function getGradient(name) {
-    var hash = 0;
-    for (var i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
-    var idx = Math.abs(hash) % gradients.length;
-    return 'linear-gradient(135deg, ' + gradients[idx][0] + ', ' + gradients[idx][1] + ')';
-  }
-  function getInitials(name) {
-    return name.split(' ').map(function(w) { return w[0]; }).join('').substring(0,2).toUpperCase();
-  }
-  function getTimeAgo(ts) {
-    if (!ts) return 'Not seen';
-    var diff = Date.now() - ts;
-    var mins = Math.floor(diff / 60000);
-    if (mins < 1) return 'Now';
-    if (mins < 60) return mins + 'm ago';
-    var hrs = Math.floor(mins / 60);
-    if (hrs < 24) return hrs + 'h ago';
-    return Math.floor(hrs / 24) + 'd ago';
-  }
-  function closeCard() {
-    document.getElementById('userCard').classList.remove('show');
-    selectedId = null;
-  }
-  function sendToParent(msg) {
-    try { window.parent.postMessage(msg, '*'); } catch(e) {}
-    try { if (window.top !== window) window.top.postMessage(msg, '*'); } catch(e) {}
-  }
-  function viewProfile() { if (selectedId) sendToParent({ type: 'viewProfile', id: selectedId }); }
-  function chatUser() { if (selectedId) sendToParent({ type: 'chatUser', id: selectedId }); }
-  function requestMyLocation() { sendToParent({ type: 'requestMyLocation' }); }
-
-  function createMarkerIcon(m, zoomedIn) {
-    var hasAvatar = m.avatar && m.avatar.length > 5;
-    var initials = getInitials(m.name);
-    var grad = getGradient(m.name);
-    if (zoomedIn) {
-      var html = '<div class="avatar-marker' + (m.isOnline ? ' online' : '') + '" style="border-color:' + m.color + ';' +
-        (hasAvatar ? 'background-image:url(' + m.avatar + ')' : '') + '">' +
-        (!hasAvatar ? '<div class="initials" style="background:' + grad + '">' + initials + '</div>' : '') +
-        '</div>';
-      return L.divIcon({ html: html, iconSize: [44, 44], iconAnchor: [22, 22], className: '' });
-    } else {
-      var dotHtml = '<div class="dot-marker' + (m.isOnline ? ' online' : '') + '" style="background:' + m.color + '"></div>';
-      return L.divIcon({ html: dotHtml, iconSize: [14, 14], iconAnchor: [7, 7], className: '' });
-    }
-  }
-
-  function renderMarkers() {
-    markerLayer.clearLayers();
-    var zoom = map.getZoom();
-    var zoomedIn = zoom >= ZOOM_THRESHOLD;
-    currentMarkers.forEach(function(m) {
-      var icon = createMarkerIcon(m, zoomedIn);
-      var marker = L.marker([m.lat, m.lng], { icon: icon, zIndexOffset: m.isOnline ? 100 : 0 }).addTo(markerLayer);
-      marker.on('click', function() {
-        selectedId = m.id;
-        var hasAvatar = m.avatar && m.avatar.length > 5;
-        var initials = getInitials(m.name);
-        var grad = getGradient(m.name);
-        var card = document.getElementById('userCard');
-        var cardAvatar = document.getElementById('cardAvatar');
-        var cardInitials = document.getElementById('cardInitials');
-        if (hasAvatar) { cardAvatar.style.backgroundImage = 'url(' + m.avatar + ')'; cardInitials.style.display = 'none'; }
-        else { cardAvatar.style.backgroundImage = 'none'; cardInitials.style.display = 'flex'; cardInitials.textContent = initials; cardInitials.style.background = grad; }
-        cardAvatar.style.borderColor = m.color;
-        document.getElementById('cardName').textContent = m.name;
-        var roleEl = document.getElementById('cardRole');
-        roleEl.textContent = m.role;
-        roleEl.style.color = m.color;
-        roleEl.style.background = m.color + '18';
-        var metaEl = document.getElementById('cardMeta');
-        if (m.isOnline) {
-          metaEl.innerHTML = '<span class="card-online-badge">Online</span>' + (m.city ? ' · ' + m.city : '');
-        } else {
-          metaEl.textContent = [m.city, getTimeAgo(m.lastSeen), m.skills].filter(Boolean).join(' · ');
+  const p = new Promise<string>((resolve, reject) => {
+    try {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        const size = 30;
+        const ring = 3;
+        const canvas = document.createElement('canvas');
+        canvas.width = size + ring * 2;
+        canvas.height = size + ring * 2;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('No canvas context'));
+          return;
         }
-        card.classList.add('show');
-      });
-    });
-  }
 
-  map.on('zoomend', function() { renderMarkers(); });
+        // Ring
+        ctx.beginPath();
+        ctx.arc(canvas.width / 2, canvas.height / 2, (size / 2) + ring, 0, Math.PI * 2);
+        ctx.fillStyle = ringColor;
+        ctx.fill();
 
-  window.addEventListener('message', function(e) {
-    if (e.data && e.data.type === 'centerOnLocation') {
-      map.flyTo([e.data.lat, e.data.lng], 14, { duration: 1 });
-    }
-    if (e.data && e.data.type === 'updateMarkers') {
-      currentMarkers = e.data.markers || [];
-      renderMarkers();
+        // Clip circle
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(canvas.width / 2, canvas.height / 2, size / 2, 0, Math.PI * 2);
+        ctx.clip();
+        // Draw image cover
+        const minSide = Math.min(img.width, img.height);
+        const sx = (img.width - minSide) / 2;
+        const sy = (img.height - minSide) / 2;
+        ctx.drawImage(img, sx, sy, minSide, minSide, ring, ring, size, size);
+        ctx.restore();
+
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.onerror = () => reject(new Error('Avatar load failed'));
+      img.src = avatarUrl;
+    } catch (e) {
+      reject(e as Error);
     }
   });
-  map.on('click', function() { closeCard(); });
-<\/script>
-</body>
-</html>`;
+
+  avatarIconCache.set(key, p);
+  void p.then((dataUrl) => avatarIconCache.set(key, dataUrl)).catch(() => avatarIconCache.delete(key));
+  return p;
 }
 
-const MAP_HTML = getMapHTML();
+export default React.memo(function DirectoryMap({
+  markers,
+  onMarkerPress,
+  onChatPress,
+  onMapBoundsChange,
+}: DirectoryMapProps) {
+  const mapDivRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<google.maps.Map | null>(null);
+  const gMarkersRef = useRef<google.maps.Marker[]>([]);
+  const markersPropRef = useRef<MapMarkerData[]>(markers);
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pulsePhaseRef = useRef(false);
+  const onBoundsCbRef = useRef(onMapBoundsChange);
+  onBoundsCbRef.current = onMapBoundsChange;
 
-export default React.memo(function DirectoryMap({ markers, onMarkerPress, onChatPress }: DirectoryMapProps) {
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-  const sentMarkersRef = useRef<string>('');
+  const [selected, setSelected] = useState<MapMarkerData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const markersList = useMemo(() => markers.map(m => ({
-    lat: m.latitude,
-    lng: m.longitude,
-    name: m.name,
-    role: m.role,
-    roleKey: m.roleKey,
-    city: m.city || '',
-    color: m.color,
-    id: m.id,
-    avatar: m.avatar || '',
-    isOnline: m.isOnline,
-    lastSeen: m.lastSeen || 0,
-    skills: (m.skills || []).slice(0, 3).join(', '),
-  })), [markers]);
+  const apiKey = useMemo(() => {
+    const ex = Constants.expoConfig?.extra as { googleMapsWebApiKey?: string } | undefined;
+    const candidates = [
+      ex?.googleMapsWebApiKey,
+      typeof process !== 'undefined' ? process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY : '',
+    ].filter(Boolean) as string[];
+
+    for (const c of candidates) {
+      if (!isUnusableGoogleMapsKey(c)) return String(c).trim();
+    }
+    return '';
+  }, []);
+
+  const mapId = useMemo(() => {
+    const ex = Constants.expoConfig?.extra as { googleMapsWebMapId?: string } | undefined;
+    const v = ex?.googleMapsWebMapId ? String(ex.googleMapsWebMapId).trim() : '';
+    return v;
+  }, []);
 
   useEffect(() => {
-    const key = markersList.map(m => m.id).sort().join(',');
-    if (key === sentMarkersRef.current) return;
-    sentMarkersRef.current = key;
+    markersPropRef.current = markers;
+  }, [markers]);
 
-    const sendMarkers = () => {
-      if (iframeRef.current?.contentWindow) {
-        iframeRef.current.contentWindow.postMessage({
-          type: 'updateMarkers',
-          markers: markersList,
-        }, '*');
+  const disposeMarkers = useCallback(() => {
+    gMarkersRef.current.forEach((m) => {
+      try {
+        const ev = typeof window !== 'undefined' ? window.google?.maps?.event : undefined;
+        if (ev) {
+          ev.clearInstanceListeners(m);
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (m as any).map = null;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (m as any).setMap?.(null);
+      } catch {
+        /* ignore */
       }
-    };
+    });
+    gMarkersRef.current = [];
+  }, []);
 
-    const timer = setTimeout(sendMarkers, 500);
-    return () => clearTimeout(timer);
-  }, [markersList]);
+  /**
+   * Step 1 (safe): always render markers directly on the map.
+   * (No clustering yet — per request.)
+   */
+  const applyMarkers = useCallback(() => {
+    const map = mapRef.current;
+    const maps = typeof window !== 'undefined' ? window.google?.maps : undefined;
+    if (!map || !maps) return;
 
-  useEffect(() => {
-    const handler = (e: MessageEvent) => {
-      if (e.data?.type === 'viewProfile' && onMarkerPress) {
-        onMarkerPress(e.data.id);
-      }
-      if (e.data?.type === 'chatUser' && onChatPress) {
-        onChatPress(e.data.id);
-      }
-      if (e.data?.type === 'requestMyLocation') {
-        if ('geolocation' in navigator) {
-          navigator.geolocation.getCurrentPosition(
-            (pos) => {
-              if (iframeRef.current?.contentWindow) {
-                iframeRef.current.contentWindow.postMessage({
-                  type: 'centerOnLocation',
-                  lat: pos.coords.latitude,
-                  lng: pos.coords.longitude,
-                }, '*');
+    const bounds = map.getBounds();
+    const zoom = map.getZoom() ?? 5;
+    const source = markersPropRef.current;
+
+    // `getBounds()` is often null on the first few frames / before tiles layout.
+    // Previously we bailed out entirely, which meant zero markers forever on some web loads.
+    let inView: MapMarkerData[];
+    if (bounds) {
+      onBoundsCbRef.current?.(toBoundsLiteral(bounds), zoom);
+      inView = source.filter((m) => pointInBounds(m.latitude, m.longitude, bounds));
+    } else {
+      inView = source;
+    }
+    const capped = inView.slice(0, MAX_MARKERS);
+
+    disposeMarkers();
+
+    // Pulse phase (very lightweight): toggled by a single interval (see effect below).
+    const pulse = pulsePhaseRef.current ? 1.3 : 1.0;
+
+    const baseDotScale = zoom < 8 ? 3.6 : zoom < 11 ? 4.6 : 5.4;
+    const markerScale = baseDotScale * pulse;
+    const dotOpacity = pulsePhaseRef.current ? 0.65 : 1;
+
+    const dotIcon = (color: string, scale: number): google.maps.Symbol => ({
+      path: maps.SymbolPath.CIRCLE,
+      fillColor: color,
+      fillOpacity: dotOpacity,
+      strokeColor: '#ffffff',
+      strokeWeight: 2,
+      scale,
+    });
+
+    const newGMarkers: google.maps.Marker[] = capped.map((data) => {
+      const isOnline = !!data.isOnline;
+      const ringColor = isOnline ? '#10B981' : '#9CA3AF';
+
+      const gm = new maps.Marker({
+        position: { lat: data.latitude, lng: data.longitude },
+        icon: dotIcon('#22C55E', markerScale), // lightweight green dots by default
+        optimized: true,
+        title: data.name,
+        label:
+          zoom >= 10 && zoom < 12
+            ? {
+                text: getInitials(data.name || ''),
+                color: '#111827',
+                fontSize: '10px',
+                fontWeight: '700',
               }
-            },
-            () => {},
-            { enableHighAccuracy: true }
-          );
+            : undefined,
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (gm as any).__mobiKind = 'dot';
+      gm.addListener('click', () => {
+        try {
+          map.panTo({ lat: data.latitude, lng: data.longitude });
+          const z = map.getZoom() ?? 5;
+          if (z < 12) map.setZoom(12);
+        } catch {
+          /* ignore */
+        }
+        setSelected(data);
+      });
+      gm.setMap(map);
+
+      // Apply avatar icon async for zoomed-in.
+      if (zoom >= 12) {
+        const avatar = resolveAvatarUrl(data.avatar);
+        if (avatar && typeof document !== 'undefined') {
+          void getAvatarIconDataUrl(avatar, ringColor)
+            .then((dataUrl) => {
+              try {
+                gm.setIcon({
+                  url: dataUrl,
+                  scaledSize: new maps.Size(36, 36),
+                } as any);
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                (gm as any).__mobiKind = 'avatar';
+              } catch {
+                /* ignore */
+              }
+            })
+            .catch(() => {});
         }
       }
-    };
-    window.addEventListener('message', handler);
-    return () => window.removeEventListener('message', handler);
-  }, [onMarkerPress, onChatPress]);
 
-  const handleLoad = React.useCallback(() => {
-    setTimeout(() => {
-      if (iframeRef.current?.contentWindow) {
-        iframeRef.current.contentWindow.postMessage({
-          type: 'updateMarkers',
-          markers: markersList,
-        }, '*');
+      return gm;
+    });
+
+    gMarkersRef.current = newGMarkers;
+
+    console.debug('[DirectoryMap.web] render', {
+      markersTotal: source.length,
+      markersRendered: capped.length,
+      hasBounds: !!bounds,
+      zoom,
+    });
+  }, [disposeMarkers]);
+
+  const updatePulseIcons = useCallback(() => {
+    const map = mapRef.current;
+    const maps = typeof window !== 'undefined' ? window.google?.maps : undefined;
+    if (!map || !maps) return;
+    const zoom = map.getZoom() ?? 5;
+    const pulse = pulsePhaseRef.current ? 1.3 : 1.0;
+    const baseDotScale = zoom < 8 ? 3.6 : zoom < 11 ? 4.6 : 5.4;
+    const markerScale = baseDotScale * pulse;
+    const dotOpacity = pulsePhaseRef.current ? 0.65 : 1;
+    const icon: google.maps.Symbol = {
+      path: maps.SymbolPath.CIRCLE,
+      fillColor: '#22C55E',
+      fillOpacity: dotOpacity,
+      strokeColor: '#ffffff',
+      strokeWeight: 2,
+      scale: markerScale,
+    };
+
+    gMarkersRef.current.forEach((m) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const kind = (m as any).__mobiKind;
+      if (kind !== 'dot') return;
+      try {
+        m.setIcon(icon as any);
+      } catch {
+        /* ignore */
       }
-    }, 800);
-  }, [markersList]);
+    });
+  }, []);
+
+  const scheduleApply = useCallback(() => {
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    idleTimerRef.current = setTimeout(() => {
+      idleTimerRef.current = null;
+      requestAnimationFrame(() => applyMarkers());
+    }, IDLE_DEBOUNCE_MS);
+  }, [applyMarkers]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    if (typeof window === 'undefined') return;
+    if (!apiKey) {
+      setError(
+        'Set EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY in .env (Maps JavaScript API browser key; HTTP referrer restrictions must include this origin). Restart Metro after changing .env.',
+      );
+      setLoading(false);
+      return;
+    }
+    const el = mapDivRef.current;
+    if (!el) return;
+
+    let cancelled = false;
+    let dispose: (() => void) | null = null;
+    const prevGmAuthFailure = (window as unknown as { gm_authFailure?: () => void }).gm_authFailure;
+
+    (window as unknown as { gm_authFailure?: () => void }).gm_authFailure = () => {
+      try {
+        prevGmAuthFailure?.();
+      } catch {
+        /* ignore */
+      }
+      if (cancelled) return;
+      setError(
+        'Google Maps could not authenticate this site. In Google Cloud Console, add an HTTP referrer like https://arunmobi-app.web.app/* for this key, enable Maps JavaScript API, then hard refresh.',
+      );
+      setLoading(false);
+    };
+
+    (async () => {
+      try {
+        await loadGoogleMaps(apiKey);
+        if (cancelled || !mapDivRef.current) return;
+
+        const gmaps = window.google?.maps;
+        console.log('[DirectoryMap.web] init map', {
+          elHeight: mapDivRef.current.getBoundingClientRect().height,
+          elWidth: mapDivRef.current.getBoundingClientRect().width,
+          hasGoogle: !!window.google,
+          hasMaps: !!gmaps,
+          hasImportLibrary: !!(gmaps as any)?.importLibrary,
+        });
+
+        const mapOptions: google.maps.MapOptions = {
+          center: INDIA,
+          zoom: 5,
+          gestureHandling: 'greedy',
+          mapTypeControl: false,
+          streetViewControl: false,
+          fullscreenControl: false,
+          clickableIcons: false,
+        };
+        if (mapId) (mapOptions as any).mapId = mapId;
+
+        let map: google.maps.Map;
+        try {
+          const MapCtor = await resolveGoogleMapsMapConstructor();
+          map = new MapCtor(mapDivRef.current, mapOptions);
+        } catch (e) {
+          const gm = window.google?.maps;
+          console.error('[DirectoryMap.web] Map init failed', e, {
+            hasGoogle: !!window.google,
+            hasMaps: !!gm,
+            hasImportLibrary: !!(gm as any)?.importLibrary,
+            hasMapCtor: !!(gm as any)?.Map,
+          });
+          throw e;
+        }
+        mapRef.current = map;
+        console.log('[DirectoryMap.web] Map initialized');
+
+        map.addListener('idle', () => scheduleApply());
+        map.addListener('zoom_changed', () => scheduleApply());
+        map.addListener('click', () => setSelected(null));
+
+        // Lightweight global pulse (single timer). Updates existing dot marker icons only.
+        const pulseTimer = setInterval(() => {
+          pulsePhaseRef.current = !pulsePhaseRef.current;
+          updatePulseIcons();
+        }, 900);
+
+        setLoading(false);
+        scheduleApply();
+        // RN-web often sizes the map container after first paint; nudge Google Maps to recalc.
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const m = mapRef.current;
+            const ev = window.google?.maps?.event;
+            if (m && ev) {
+              ev.trigger(m, 'resize');
+              scheduleApply();
+            }
+          });
+        });
+        dispose = () => {
+          clearInterval(pulseTimer);
+        };
+      } catch {
+        if (!cancelled) {
+          setError('Map unavailable. Check EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY, Maps JavaScript API, and HTTP referrer restrictions, then rebuild.');
+          setLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      (window as unknown as { gm_authFailure?: () => void }).gm_authFailure = prevGmAuthFailure;
+      try { dispose?.(); } catch {}
+      if (idleTimerRef.current) {
+        clearTimeout(idleTimerRef.current);
+        idleTimerRef.current = null;
+      }
+      disposeMarkers();
+      mapRef.current = null;
+    };
+  }, [apiKey, disposeMarkers, scheduleApply, updatePulseIcons]);
+
+  useEffect(() => {
+    if (!mapRef.current || loading) return;
+    scheduleApply();
+  }, [markers, loading, scheduleApply]);
+
+  const requestMyLocation = useCallback(() => {
+    if (!('geolocation' in navigator) || !mapRef.current) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const m = mapRef.current;
+        if (!m) return;
+        m.panTo({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        m.setZoom(12);
+      },
+      () => {},
+      { enableHighAccuracy: true },
+    );
+  }, []);
 
   return (
     <View style={styles.container}>
-      <iframe
-        ref={iframeRef as any}
-        srcDoc={MAP_HTML}
-        onLoad={handleLoad}
-        sandbox="allow-scripts allow-same-origin"
-        style={{ width: '100%', height: '100%', border: 'none' } as any}
+      <View
+        collapsable={false}
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ref={mapDivRef as any}
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        {...({ id: 'mobi-directory-map' } as any)}
+        style={{ width: '100%', height: '100%', position: 'absolute', inset: 0 }}
       />
+
+      {loading && (
+        <View style={styles.loading}>
+          <ActivityIndicator size="large" color="#10B981" />
+          <Text style={styles.loadingText}>Loading map…</Text>
+        </View>
+      )}
+
+      {!loading && !error && markers.length === 0 && (
+        <View style={styles.emptyWrap}>
+          <Text style={styles.emptyText}>
+            No map pins yet. Profiles need a saved latitude/longitude (and customers need location sharing on) to appear here.
+          </Text>
+        </View>
+      )}
+
+      {error && (
+        <View style={styles.errorWrap}>
+          <Text style={styles.errorText}>{error}</Text>
+        </View>
+      )}
+
+      <Pressable style={styles.locBtn} onPress={requestMyLocation}>
+        <Ionicons name="locate" size={22} color="#333" />
+      </Pressable>
+
+      {selected && (
+        <View style={[styles.card, styles.cardShow]}>
+          <Pressable style={styles.closeBtn} onPress={() => setSelected(null)}>
+            <Ionicons name="close" size={20} color="#888" />
+          </Pressable>
+          <View style={[styles.cardAvatar, { borderColor: selected.isOnline ? '#10B981' : '#9CA3AF' }]}>
+            {resolveAvatarUrl(selected.avatar) ? (
+              <Image
+                source={{ uri: resolveAvatarUrl(selected.avatar) }}
+                style={{ width: '100%', height: '100%' }}
+                contentFit="cover"
+              />
+            ) : (
+              <View style={[styles.cardAvatarFill, { backgroundColor: selected.color }]}>
+                <Text style={styles.cardInitialsText}>{getInitials(selected.name)}</Text>
+              </View>
+            )}
+          </View>
+          <View style={styles.cardInfo}>
+            <Text style={styles.cardName} numberOfLines={1}>
+              {selected.name}
+            </Text>
+            <Text style={[styles.cardRole, { color: selected.isOnline ? '#10B981' : '#6B7280' }]}>
+              {selected.role || 'Technician'}
+            </Text>
+            <Text style={styles.cardMeta} numberOfLines={1}>
+              {[selected.city, selected.isOnline ? 'Online' : 'Offline', (selected.skills || []).slice(0, 2).join(', ')]
+                .filter(Boolean)
+                .join(' · ')}
+            </Text>
+          </View>
+          <View style={styles.cardActions}>
+            <Pressable
+              style={styles.btnProfile}
+              onPress={() => {
+                const id = selected.id;
+                setSelected(null);
+                onMarkerPress?.(id);
+              }}
+            >
+              <Text style={styles.btnProfileText}>Profile</Text>
+            </Pressable>
+            <Pressable
+              style={styles.btnChat}
+              onPress={() => {
+                const id = selected.id;
+                setSelected(null);
+                onChatPress?.(id);
+              }}
+            >
+              <Text style={styles.btnChatText}>Chat</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
     </View>
   );
 });
@@ -354,5 +569,141 @@ export default React.memo(function DirectoryMap({ markers, onMarkerPress, onChat
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    position: 'relative',
+    ...(Platform.OS === 'web'
+      ? ({
+          width: '100%',
+          // Critical: ensure the container has a real height on web.
+          // If height collapses to 0, Google Maps will render a blank area.
+          height: '100vh',
+          minHeight: 420,
+          alignSelf: 'stretch',
+        } as Record<string, unknown>)
+      : {}),
   },
+  loading: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.7)',
+    zIndex: 5,
+    gap: 12,
+  },
+  loadingText: {
+    marginTop: 4,
+    fontSize: 14,
+    color: '#374151',
+    fontWeight: '600',
+  },
+  errorWrap: {
+    position: 'absolute',
+    top: 72,
+    left: 12,
+    right: 12,
+    zIndex: 10,
+    backgroundColor: '#FEE2E2',
+    padding: 12,
+    borderRadius: 12,
+  },
+  emptyWrap: {
+    position: 'absolute',
+    top: 88,
+    left: 12,
+    right: 12,
+    zIndex: 8,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.06)',
+  },
+  emptyText: { color: '#4B5563', fontSize: 13, lineHeight: 18 },
+  errorText: { color: '#991B1B', fontSize: 13 },
+  locBtn: {
+    position: 'absolute',
+    bottom: 88,
+    right: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.08)',
+    zIndex: 20,
+    boxShadow: '0 2px 12px rgba(0,0,0,0.12)',
+  } as any,
+  card: {
+    position: 'absolute',
+    bottom: 56,
+    left: 12,
+    right: 12,
+    maxWidth: 420,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(255,255,255,0.98)',
+    borderRadius: 16,
+    padding: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.06)',
+    zIndex: 30,
+    boxShadow: '0 4px 24px rgba(0,0,0,0.12)',
+    transform: [{ translateY: 24 }],
+    opacity: 0,
+  } as any,
+  cardShow: {
+    transform: [{ translateY: 0 }],
+    opacity: 1,
+    transitionProperty: 'transform, opacity',
+    transitionDuration: '240ms',
+    transitionTimingFunction: 'cubic-bezier(.2,.9,.2,1)',
+  } as any,
+  closeBtn: {
+    position: 'absolute',
+    top: 8,
+    right: 10,
+    zIndex: 1,
+    padding: 4,
+  },
+  cardAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 3,
+    overflow: 'hidden',
+  },
+  cardAvatarFill: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 21,
+  },
+  cardInitialsText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  cardInfo: { flex: 1, minWidth: 0 },
+  cardName: { fontSize: 15, fontWeight: '700', color: '#111827' },
+  cardRole: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', marginTop: 2 },
+  cardMeta: { fontSize: 11, color: '#6B7280', marginTop: 4 },
+  cardActions: { flexDirection: 'column', gap: 6 },
+  btnProfile: {
+    backgroundColor: 'rgba(0,0,0,0.06)',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  btnProfileText: { fontSize: 12, fontWeight: '700', color: '#333' },
+  btnChat: {
+    backgroundColor: '#FF2D55',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  btnChatText: { fontSize: 12, fontWeight: '700', color: '#fff' },
 });

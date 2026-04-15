@@ -12,10 +12,15 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 import { router } from 'expo-router';
 import Colors from '@/constants/colors';
 import { useApp } from '@/lib/context';
-import { apiRequest, getApiUrl } from '@/lib/query-client';
+import { apiRequest } from '@/lib/query-client';
+import { uploadVideoToBunnyStream } from '@/lib/bunny-stream';
+import { uploadReelVideoViaMultipartApi } from '@/lib/reel-server-upload';
 
-const MAX_VIDEO_SIZE_MB = 200;
+/** Large reels: direct TUS to Bunny (no multipart through API). */
+const MAX_VIDEO_SIZE_MB = 2048;
 const MAX_VIDEO_SIZE_BYTES = MAX_VIDEO_SIZE_MB * 1024 * 1024;
+const ENCODING_POLL_MS = 10 * 60 * 1000;
+const ENCODING_RETRY_MS = 4000;
 const MAX_VIDEO_DURATION_SECS = 120;
 
 const C = Colors.light;
@@ -25,12 +30,15 @@ export default function UploadReelScreen() {
   const insets = useSafeAreaInsets();
   const { profile } = useApp();
   const [videoUri, setVideoUri] = useState<string | null>(null);
+  const [videoMeta, setVideoMeta] = useState<{ fileName?: string; mimeType?: string; fileSize?: number } | null>(null);
   const [localThumbUri, setLocalThumbUri] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState('');
   const [uploadPercent, setUploadPercent] = useState(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [webPickedFile, setWebPickedFile] = useState<Blob | File | null>(null);
 
   const player = useVideoPlayer(videoUri || '', (p) => {
     p.loop = true;
@@ -45,7 +53,7 @@ export default function UploadReelScreen() {
     if (!result.canceled && result.assets && result.assets[0]) {
       const asset = result.assets[0];
 
-      if (Platform.OS !== 'web' && asset.fileSize && asset.fileSize > MAX_VIDEO_SIZE_BYTES) {
+      if (asset.fileSize && asset.fileSize > MAX_VIDEO_SIZE_BYTES) {
         const sizeMB = (asset.fileSize / (1024 * 1024)).toFixed(1);
         Alert.alert(
           'Video Too Large',
@@ -64,6 +72,18 @@ export default function UploadReelScreen() {
       }
 
       setVideoUri(asset.uri);
+      setVideoMeta({
+        fileName: (asset as any).fileName || undefined,
+        mimeType: (asset as any).mimeType || undefined,
+        fileSize: (asset as any).fileSize || undefined,
+      });
+      if (Platform.OS === 'web') {
+        const f = (asset as any).file;
+        setWebPickedFile(f instanceof Blob && typeof (f as Blob).size === 'number' && (f as Blob).size > 0 ? f : null);
+      } else {
+        setWebPickedFile(null);
+      }
+      setUploadError(null);
       setLocalThumbUri(null);
       if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
@@ -79,39 +99,99 @@ export default function UploadReelScreen() {
     }
   }, []);
 
-  const uploadVideo = async (uri: string): Promise<{ directUrl: string } | null> => {
+  type UploadVideoOk =
+    | { ok: true; mode: 'bunny'; videoId: string; directUrl: string }
+    | { ok: true; mode: 'multipart'; videoUrl: string; playbackUrl?: string; videoId?: string };
+  type UploadVideoErr = { ok: false; error: string };
+  type UploadVideoResult = UploadVideoOk | UploadVideoErr;
+
+  const isPlayableVideoUrl = (url: string) => /\.mp4(\?|#|$)|\.m3u8(\?|#|$)/i.test(String(url || '').trim());
+
+  function shouldFallbackToMultipart(err: unknown): boolean {
+    const msg = String((err as any)?.message || err || '').toLowerCase();
+    return (
+      msg.includes('bunny stream not configured') ||
+      msg.includes('503') ||
+      msg.includes('failed to create bunny') ||
+      msg.includes('create bunny stream video')
+    );
+  }
+
+  const uploadVideo = async (uri: string): Promise<UploadVideoResult> => {
     try {
-      setUploadProgress('Preparing video...');
-      setUploadPercent(5);
+      setUploadError(null);
+      setUploadProgress('Preparing upload...');
+      setUploadPercent(2);
 
-      const formData = new FormData();
-      if (Platform.OS === 'web') {
-        const response = await fetch(uri);
-        const blob = await response.blob();
-        formData.append('video', blob, 'reel.mp4');
-      } else {
-        formData.append('video', { uri, type: 'video/mp4', name: 'reel.mp4' } as any);
+      // Auto-retry once on failure (network / timeouts)
+      const attempt = async () => {
+      try {
+        const r = await uploadVideoToBunnyStream(
+          uri,
+          title?.trim() || 'temp-video',
+          (p) => {
+            setUploadPercent(Math.max(2, Math.min(94, p.percent)));
+            setUploadProgress(p.message);
+          },
+          undefined,
+          false,
+          videoMeta?.fileSize,
+          Platform.OS === 'web' ? webPickedFile : null,
+        );
+
+        setUploadPercent(100);
+        setUploadProgress('Upload complete. Publishing…');
+        return { ok: true, mode: 'bunny', videoId: r.videoId, directUrl: r.directUrl };
+      } catch (bunnyErr: any) {
+        if (!shouldFallbackToMultipart(bunnyErr)) throw bunnyErr;
+        console.warn('[Upload] Bunny Stream unavailable, using multipart fallback:', bunnyErr?.message);
+        setUploadProgress('Uploading via server (large file)…');
+        const out = await uploadReelVideoViaMultipartApi(uri, {
+          mimeType: videoMeta?.mimeType,
+          fileName: videoMeta?.fileName,
+          webFile: Platform.OS === 'web' ? webPickedFile : null,
+          onProgress: (pct, m) => {
+            setUploadPercent(Math.max(2, Math.min(94, pct)));
+            setUploadProgress(m);
+          },
+        });
+        if (!out.mode || !/bunny_stream/i.test(String(out.mode))) {
+          throw new Error('Video uploaded without Bunny Stream encoding. Please retry in a moment.');
+        }
+        const videoUrl = out.directUrl || out.playbackUrl || out.url || '';
+        if (!videoUrl) throw new Error('Upload succeeded but server did not return a playback URL');
+        if (!isPlayableVideoUrl(videoUrl)) throw new Error('Upload succeeded but server returned a non-playable video URL');
+        setUploadPercent(100);
+        setUploadProgress('Ready to publish');
+        return { ok: true, mode: 'multipart', videoUrl, playbackUrl: out.playbackUrl, videoId: out.videoId };
       }
+      };
 
-      setUploadProgress('Uploading to CDN...');
-      setUploadPercent(20);
-
-      const baseUrl = getApiUrl();
-      const uploadUrl = new URL('/api/upload-video', baseUrl).toString();
-
-      const res = await fetch(uploadUrl, { method: 'POST', body: formData });
-      setUploadPercent(90);
-
-      const data = await res.json();
-      if (!data.success) throw new Error(data.message || 'Upload failed');
-
-      setUploadPercent(100);
-      setUploadProgress('Done!');
-      return { directUrl: data.url };
+      try {
+        return await attempt();
+      } catch (firstErr: any) {
+        const msg = String(firstErr?.message || '').toLowerCase();
+        const retryable =
+          msg.includes('network') ||
+          msg.includes('timeout') ||
+          msg.includes('failed to fetch') ||
+          msg.includes('fetch failed') ||
+          msg.includes('econnreset');
+        if (retryable) {
+          console.warn('[Upload] retrying once after error:', firstErr?.message);
+          setUploadProgress('Retrying upload…');
+          return await attempt();
+        }
+        throw firstErr;
+      }
     } catch (e: any) {
       console.error('[Upload] Video failed:', e);
-      Alert.alert('Upload Failed', e?.message || 'Could not upload video. Please check your connection and try again.');
-      return null;
+      const msg =
+        e?.message === 'CANCELLED'
+          ? 'Upload cancelled.'
+          : e?.message || 'Could not upload video. Check your connection and try again.';
+      setUploadError(msg);
+      return { ok: false, error: msg };
     }
   };
 
@@ -126,8 +206,10 @@ export default function UploadReelScreen() {
       } else {
         formData.append('image', { uri, type: 'image/jpeg', name: 'reel-thumbnail.jpg' } as any);
       }
-      const uploadUrl = new URL('/api/upload-image', getApiUrl()).toString();
-      const res = await fetch(uploadUrl, { method: 'POST', body: formData });
+      const res = await apiRequest('POST', '/api/upload-image', formData, {
+        timeoutMs: 180000,
+        retries: 2,
+      });
       const data = await res.json();
       if (!data.success) return null;
       return data.url || null;
@@ -137,6 +219,47 @@ export default function UploadReelScreen() {
     }
   };
 
+  const publishBunnyReelWhenReady = useCallback(async (reelBody: Record<string, unknown>) => {
+    const videoId = String(reelBody.videoId || '').trim();
+    const startedAt = Date.now();
+
+    while (true) {
+      try {
+        const res = await apiRequest('POST', '/api/reels', reelBody, {
+          timeoutMs: 120000,
+          retries: 2,
+        });
+        return await res.json();
+      } catch (e: any) {
+        const msg = String(e?.message || e?.detail || e || '');
+        const stillProcessing = /still processing/i.test(msg);
+        if (!stillProcessing || !videoId) throw e;
+
+        if (Date.now() - startedAt >= ENCODING_POLL_MS) {
+          throw new Error('Video upload finished, but Bunny is still processing it. Please try posting again shortly.');
+        }
+
+        setUploadProgress('Processing video… publishing when ready');
+        try {
+          const statusRes = await apiRequest('GET', `/api/bunny/video-status/${videoId}`, undefined, {
+            timeoutMs: 60000,
+            retries: 1,
+          });
+          const statusData = await statusRes.json();
+          const pct = Math.max(0, Math.min(100, Number(statusData?.encodeProgress || 0)));
+          setUploadPercent(95 + Math.min(5, Math.round((pct / 100) * 5)));
+          if (typeof statusData?.status === 'number' && statusData.status === 4) {
+            throw new Error('Bunny encoding failed');
+          }
+        } catch (statusErr: any) {
+          if (/encoding failed/i.test(String(statusErr?.message || ''))) throw statusErr;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, ENCODING_RETRY_MS));
+      }
+    }
+  }, []);
+
   const handleSubmit = useCallback(async () => {
     if (!videoUri) {
       Alert.alert('No video', 'Please select a video first.');
@@ -145,46 +268,73 @@ export default function UploadReelScreen() {
     if (!profile) return;
 
     setIsUploading(true);
+    setUploadError(null);
     if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
     try {
       setUploadPercent(0);
-      setUploadProgress('Uploading video... 0%');
+      setUploadProgress('Starting…');
       const uploadResult = await uploadVideo(videoUri);
-      setUploadProgress('');
-      setUploadPercent(0);
-      if (!uploadResult) {
-        Alert.alert('Upload Failed', 'Could not upload video. Please try again.');
+      if (!uploadResult.ok) {
+        Alert.alert('Upload Failed', uploadResult.error);
         setIsUploading(false);
         return;
       }
 
-      const { directUrl: serverUrl } = uploadResult;
+      setUploadProgress('Saving reel…');
       const thumbnailUrl = localThumbUri ? await uploadThumbnail(localThumbUri) : '';
 
-      const res = await apiRequest('POST', '/api/reels', {
-        userId: profile.id,
-        userName: profile.name,
-        userAvatar: profile.avatar || '',
-        title: title.trim(),
-        description: description.trim(),
-        videoUrl: serverUrl,
-        thumbnailUrl: thumbnailUrl || '',
-      });
+      const reelBody =
+        uploadResult.mode === 'bunny'
+          ? {
+              userId: profile.id,
+              userName: profile.name,
+              userAvatar: profile.avatar || '',
+              title: title.trim(),
+              description: description.trim(),
+              videoId: uploadResult.videoId,
+              thumbnailUrl: thumbnailUrl || '',
+            }
+          : {
+              userId: profile.id,
+              userName: profile.name,
+              userAvatar: profile.avatar || '',
+              title: title.trim(),
+              description: description.trim(),
+              videoUrl: uploadResult.videoUrl,
+              thumbnailUrl: thumbnailUrl || '',
+            };
 
-      const data = await res.json();
+      const data =
+        uploadResult.mode === 'bunny'
+          ? await publishBunnyReelWhenReady(reelBody)
+          : await (async () => {
+              const res = await apiRequest('POST', '/api/reels', reelBody, {
+                timeoutMs: 120000,
+                retries: 2,
+              });
+              return await res.json();
+            })();
       if (data.success) {
+        const savedVideoUrl = String(data?.reel?.videoUrl || '');
+        if (savedVideoUrl && !isPlayableVideoUrl(savedVideoUrl)) {
+          throw new Error('Reel was saved without a playable video URL');
+        }
+        setUploadProgress('');
+        setUploadPercent(0);
         router.back();
       } else {
-        Alert.alert('Error', 'Failed to create reel.');
+        Alert.alert('Error', data.message || 'Failed to create reel.');
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error('[Reel] Create error:', e);
-      Alert.alert('Error', 'Something went wrong.');
+      Alert.alert('Error', e?.message || 'Something went wrong.');
     } finally {
       setIsUploading(false);
+      setUploadProgress('');
+      setUploadPercent(0);
     }
-  }, [videoUri, title, description, profile]);
+  }, [videoUri, title, description, profile, localThumbUri, videoMeta, webPickedFile, publishBunnyReelWhenReady]);
 
   const canUpload = profile?.role === 'teacher' || profile?.role === 'supplier' || profile?.role === 'technician' || profile?.role === 'shopkeeper';
 
@@ -254,7 +404,9 @@ export default function UploadReelScreen() {
             <Text style={styles.pickVideoSubtitle}>From your gallery</Text>
             <View style={styles.limitsBadge}>
               <Ionicons name="information-circle-outline" size={13} color={C.textSecondary} />
-              <Text style={styles.limitsText}>Max {MAX_VIDEO_SIZE_MB} MB · Max {MAX_VIDEO_DURATION_SECS / 60} min</Text>
+              <Text style={styles.limitsText}>
+                Up to {MAX_VIDEO_SIZE_MB} MB (direct to Bunny) · Max {MAX_VIDEO_DURATION_SECS / 60} min
+              </Text>
             </View>
           </Pressable>
         )}
@@ -304,6 +456,22 @@ export default function UploadReelScreen() {
             )}
           </View>
         )}
+
+        {!isUploading && uploadError && videoUri ? (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>{uploadError}</Text>
+            <Pressable
+              style={styles.retryBtn}
+              onPress={() => {
+                setUploadError(null);
+                void handleSubmit();
+              }}
+            >
+              <Ionicons name="refresh" size={18} color="#fff" />
+              <Text style={styles.retryBtnText}>Retry upload</Text>
+            </Pressable>
+          </View>
+        ) : null}
       </View>
     </View>
   );
@@ -524,5 +692,33 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_700Bold',
     textAlign: 'center',
     marginTop: 4,
+  },
+  errorBox: {
+    marginTop: 16,
+    padding: 14,
+    borderRadius: 12,
+    backgroundColor: C.surface,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  errorText: {
+    color: '#DC2626',
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    marginBottom: 12,
+  },
+  retryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: C.primary,
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+  retryBtnText: {
+    color: '#fff',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 15,
   },
 });

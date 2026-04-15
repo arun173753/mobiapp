@@ -95,6 +95,7 @@ export const posts = pgTable("posts", {
   category: text("category").notNull().default("repair"),
   likes: text("likes").notNull().default("[]"),
   comments: text("comments").notNull().default("[]"),
+  views: integer("views").notNull().default(0),
   createdAt: bigint("created_at", { mode: "number" }).notNull().default(sql`EXTRACT(EPOCH FROM NOW()) * 1000`),
 });
 
@@ -441,6 +442,21 @@ export const adminNotifications = pgTable("admin_notifications", {
   body: text("body").default(""), // Push notification body
   image: text("image").default(""), // Push notification image URL
   read: integer("read").notNull().default(0),
+  createdAt: bigint("created_at", { mode: "number" }).notNull().default(sql`EXTRACT(EPOCH FROM NOW()) * 1000`),
+});
+
+/** Admin megaphone / broadcast pushes (OneSignal) for audit trail. */
+export const broadcastPushLogs = pgTable("broadcast_push_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  image: text("image").default(""),
+  openPath: text("open_path").default(""),
+  audience: text("audience").notNull().default("all"),
+  targetRole: text("target_role").default(""),
+  recipientCount: integer("recipient_count").notNull().default(0),
+  oneSignalId: text("onesignal_id").default(""),
+  error: text("error").default(""),
   createdAt: bigint("created_at", { mode: "number" }).notNull().default(sql`EXTRACT(EPOCH FROM NOW()) * 1000`),
 });
 

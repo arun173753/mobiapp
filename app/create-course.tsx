@@ -221,6 +221,7 @@ export default function CreateCourseScreen() {
       cancelSignal,
       false,
       fileSize || undefined,
+      Platform.OS === 'web' ? videoFile : null,
     );
 
     UploadManager.finish();

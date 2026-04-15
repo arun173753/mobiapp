@@ -52,3 +52,14 @@ const pool = new pg.Pool({
 });
 
 export const db = drizzle(pool, { schema });
+
+/** Call once at startup so Cloud Run / first request does not hide connection failures. */
+export async function verifyDatabaseConnection(): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("SELECT 1");
+    console.log("[DB] Connection OK (SELECT 1)");
+  } finally {
+    client.release();
+  }
+}

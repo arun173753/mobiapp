@@ -3,15 +3,17 @@ import { createServer, type Server } from "node:http";
 import { getFirestore, getAdminAuth, getStorage } from "./firebase-admin";
 import { db } from "./db";
 import OpenAI from "openai";
-import { notifyAllUsers, notifyNewPost, notifyUser, notifyLiveChat, sendNotification, getDeviceCount, notifyUsersByRole } from "./push-notifications";
-import { profiles, conversations, messages, posts, jobs, reels, products, orders, subscriptionSettings, courses, courseChapters, courseVideos, courseEnrollments, dubbedVideos, ads, liveChatMessages, liveClasses, liveSessions, courseNotices, sessions, payments, teacherPayouts, appSettings, videoProgress, livePolls, livePollVotes, emailCampaigns, otpTokens, adminNotifications, repairBookings, protectionPlans, protectionClaims, leads, leadClaims } from "@shared/schema";
+import { notifyAllUsers, notifyNewPost, notifyUser, notifyLiveChat, sendNotification, getDeviceCount, notifyUsersByRole, getOneSignalSubscriberCount, isOneSignalConfigured, sendNotificationToSubscriptionIds } from "./push-notifications";
+import { profiles, conversations, messages, posts, jobs, reels, products, orders, subscriptionSettings, courses, courseChapters, courseVideos, courseEnrollments, dubbedVideos, ads, liveChatMessages, liveClasses, liveSessions, courseNotices, sessions, payments, teacherPayouts, appSettings, videoProgress, livePolls, livePollVotes, emailCampaigns, otpTokens, adminNotifications, broadcastPushLogs, repairBookings, protectionPlans, protectionClaims, leads, leadClaims } from "@shared/schema";
 import { sendWelcomeEmail, sendOTPEmail } from "./lib/sendEmail";
 import { eq, or, and, desc, gt, gte, lt, sql, ne, isNotNull, isNull } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import multer from "multer";
 import * as fs from "fs";
 import * as path from "path";
+import { Readable } from "node:stream";
 import * as crypto from "crypto";
+import sharp from "sharp";
 import Razorpay from "razorpay";
 import {
   apiPublicBase,
@@ -50,20 +52,43 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-const BUNNY_STORAGE_API_KEY = process.env.BUNNY_STORAGE_API_KEY || "";
-const BUNNY_STORAGE_ZONE_NAME = process.env.BUNNY_STORAGE_ZONE_NAME || "";
+const BUNNY_STORAGE_API_KEY =
+  process.env.BUNNY_STORAGE_API_KEY ||
+  process.env.BUNNY_STORAGE_ACCESS_KEY || // compatibility
+  "";
+const BUNNY_STORAGE_ZONE_NAME =
+  process.env.BUNNY_STORAGE_ZONE_NAME ||
+  process.env.BUNNY_STORAGE_ZONE || // compatibility
+  "";
+const BUNNY_CDN_URL =
+  process.env.BUNNY_CDN_URL ||
+  process.env.BUNNY_CDN_BASE_URL || // compatibility
+  "";
+
 const BUNNY_STORAGE_REGION = process.env.BUNNY_STORAGE_REGION || "uk";
-const BUNNY_STORAGE_ENDPOINT =
-  BUNNY_STORAGE_REGION === "de"
-    ? "https://storage.bunnycdn.com"
-    : `https://${BUNNY_STORAGE_REGION}.storage.bunnycdn.com`;
-const BUNNY_CDN_URL = process.env.BUNNY_CDN_URL || "";
-const bunnyAvailable = !!(BUNNY_STORAGE_API_KEY && BUNNY_STORAGE_ZONE_NAME);
+const BUNNY_STORAGE_ENDPOINT_RAW =
+  process.env.BUNNY_STORAGE_ENDPOINT || // may be a full URL or host
+  process.env.BUNNY_STORAGE_HOST || // compatibility
+  "";
+const BUNNY_STORAGE_ENDPOINT = (() => {
+  // If endpoint provided (e.g. "storage.bunnycdn.com"), normalize to "https://storage.bunnycdn.com"
+  if (BUNNY_STORAGE_ENDPOINT_RAW) {
+    const raw = BUNNY_STORAGE_ENDPOINT_RAW.trim();
+    if (raw.startsWith("http://") || raw.startsWith("https://")) return raw.replace(/\/+$/, "");
+    return `https://${raw.replace(/\/+$/, "")}`;
+  }
+  // Otherwise infer from region (keeps existing behavior)
+  if (BUNNY_STORAGE_REGION === "de") return "https://storage.bunnycdn.com";
+  return `https://${BUNNY_STORAGE_REGION}.storage.bunnycdn.com`;
+})();
+
+const bunnyAvailable = !!(BUNNY_STORAGE_API_KEY && BUNNY_STORAGE_ZONE_NAME && BUNNY_CDN_URL);
 
 // Bunny Stream — for video encoding + HLS streaming
 const BUNNY_STREAM_API_KEY = process.env.BUNNY_STREAM_API_KEY || '';
 const BUNNY_STREAM_LIBRARY_ID = process.env.BUNNY_STREAM_LIBRARY_ID || '';
-const bunnyStreamAvailable = !!(BUNNY_STREAM_API_KEY && BUNNY_STREAM_LIBRARY_ID);
+const bunnyStreamLibraryIsValid = /^\d+$/.test(BUNNY_STREAM_LIBRARY_ID.trim());
+const bunnyStreamAvailable = !!(BUNNY_STREAM_API_KEY && BUNNY_STREAM_LIBRARY_ID && bunnyStreamLibraryIsValid);
 
 if (bunnyAvailable) {
   console.log(`[Bunny] Storage initialized: zone=${BUNNY_STORAGE_ZONE_NAME}, region=${BUNNY_STORAGE_REGION}`);
@@ -73,7 +98,129 @@ if (bunnyAvailable) {
 if (bunnyStreamAvailable) {
   console.log(`[BunnyStream] Initialized: library=${BUNNY_STREAM_LIBRARY_ID}`);
 } else {
-  console.log('[BunnyStream] Missing BUNNY_STREAM_API_KEY or BUNNY_STREAM_LIBRARY_ID');
+  console.log('[BunnyStream] Disabled (missing/invalid config)', {
+    hasApiKey: !!BUNNY_STREAM_API_KEY,
+    hasLibraryId: !!BUNNY_STREAM_LIBRARY_ID,
+    libraryIdIsValid: bunnyStreamLibraryIsValid,
+  });
+}
+
+/** Bunny Storage PUT / Stream PUT can take a long time on slow uplinks (default 15m). */
+const BUNNY_PUT_TIMEOUT_MS = Math.max(
+  60_000,
+  parseInt(process.env.BUNNY_UPLOAD_TIMEOUT_MS || "900000", 10) || 900000,
+);
+
+function getBunnyStreamUrls(videoId: string, libraryId = BUNNY_STREAM_LIBRARY_ID) {
+  const lib = String(libraryId || "").trim();
+  const id = String(videoId || "").trim();
+  return {
+    embedUrl: `https://iframe.mediadelivery.net/embed/${lib}/${id}`,
+    hlsUrl: `https://vz-${lib}.b-cdn.net/${id}/playlist.m3u8`,
+    mp4Url: `https://vz-${lib}.b-cdn.net/${id}/play_720p.mp4`,
+    thumbnailUrl: `https://vz-${lib}.b-cdn.net/${id}/thumbnail.jpg`,
+  };
+}
+
+function isPlayableReelVideoUrl(url: unknown): boolean {
+  if (typeof url !== "string") return false;
+  const value = url.trim().toLowerCase();
+  if (!value) return false;
+  return /\.mp4(\?|#|$)/i.test(value) || /\.m3u8(\?|#|$)/i.test(value);
+}
+
+function normalizePlayableReelVideoUrl(url: unknown, libraryId = BUNNY_STREAM_LIBRARY_ID): string {
+  if (typeof url !== "string") return "";
+  const value = url.trim();
+  if (!value) return "";
+  if (isPlayableReelVideoUrl(value)) return value;
+
+  const videoId =
+    value.match(/b-cdn\.net\/([a-f0-9-]{36})\//i)?.[1] ||
+    value.match(/embed\/\d+\/([a-f0-9-]{36})/i)?.[1] ||
+    value.match(/mediadelivery\.net\/[^/]+\/([a-f0-9-]{36})/i)?.[1] ||
+    "";
+  const libFromUrl = value.match(/vz-(\d+)\.b-cdn\.net/i)?.[1] || libraryId;
+  if (!videoId || !libFromUrl) return "";
+  return getBunnyStreamUrls(videoId, libFromUrl).mp4Url;
+}
+
+function getBunnyVideoRefFromUrl(url: string): { videoId: string; libraryId: string } | null {
+  const value = String(url || "").trim();
+  if (!value) return null;
+  const m = value.match(/vz-(\d+)\.b-cdn\.net\/([a-f0-9-]{36})\//i);
+  if (m) return { libraryId: m[1], videoId: m[2] };
+  const e = value.match(/embed\/(\d+)\/([a-f0-9-]{36})/i);
+  if (e) return { libraryId: e[1], videoId: e[2] };
+  const idOnly = value.match(/([a-f0-9-]{36})/i)?.[1] || "";
+  if (idOnly && BUNNY_STREAM_LIBRARY_ID) {
+    return { libraryId: BUNNY_STREAM_LIBRARY_ID, videoId: idOnly };
+  }
+  return null;
+}
+
+const bunnyVideoPlayableCache = new Map<string, { ok: boolean; checkedAt: number }>();
+
+async function isBunnyVideoPlayable(videoId: string, libraryId: string): Promise<boolean> {
+  const key = `${libraryId}:${videoId}`;
+  const now = Date.now();
+  const cached = bunnyVideoPlayableCache.get(key);
+  if (cached && now - cached.checkedAt < 5 * 60 * 1000) {
+    return cached.ok;
+  }
+  try {
+    const status = await fetchBunnyVideoStatus(videoId, libraryId);
+    const ok = Number(status?.status) === 3;
+    bunnyVideoPlayableCache.set(key, { ok, checkedAt: now });
+    return ok;
+  } catch {
+    // Keep reel visible on transient status-check failures.
+    return true;
+  }
+}
+
+async function fetchBunnyVideoStatus(videoId: string, libraryId = BUNNY_STREAM_LIBRARY_ID) {
+  const res = await fetch(
+    `https://video.bunnycdn.com/library/${libraryId}/videos/${videoId}`,
+    {
+      headers: { AccessKey: BUNNY_STREAM_API_KEY },
+      signal: AbortSignal.timeout(45000),
+    },
+  );
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    const err = new Error(`Failed to get Bunny video status (${res.status}) ${txt.slice(0, 300)}`);
+    (err as any).status = res.status;
+    throw err;
+  }
+  return await res.json() as any;
+}
+
+async function waitForBunnyPlayableUrl(
+  videoId: string,
+  {
+    libraryId = BUNNY_STREAM_LIBRARY_ID,
+    timeoutMs = 20 * 1000,
+    intervalMs = 4000,
+  }: {
+    libraryId?: string;
+    timeoutMs?: number;
+    intervalMs?: number;
+  } = {},
+): Promise<{ videoUrl: string; thumbnailUrl: string; status: any }> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const status = await fetchBunnyVideoStatus(videoId, libraryId);
+    if (status?.status === 3) {
+      const urls = getBunnyStreamUrls(videoId, libraryId);
+      return { videoUrl: urls.mp4Url, thumbnailUrl: urls.thumbnailUrl, status };
+    }
+    if (status?.status === 4) {
+      throw new Error("Bunny encoding failed");
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error("Video is still processing. Please try posting again in a minute.");
 }
 
 // Strip EXIF data from JPEG using Buffer manipulation (no external deps)
@@ -141,7 +288,9 @@ async function uploadToStorage(buffer: Buffer, filename: string): Promise<string
           body: buffer,
           duplex: 'half',
         } as any),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('[Bunny] Upload timeout after 15s')), 15000))
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`[Bunny] Upload timeout after ${BUNNY_PUT_TIMEOUT_MS}ms`)), BUNNY_PUT_TIMEOUT_MS),
+        ),
       ]) as any;
       
       console.log(`[Bunny] Upload response: ${response.status}`);
@@ -176,6 +325,30 @@ async function uploadToStorage(buffer: Buffer, filename: string): Promise<string
   return uploadsPublicFileUrl(localFilename);
 }
 
+async function normalizePushBannerJpeg(input: Buffer): Promise<{ out: Buffer; meta: { bytes: number } }> {
+  // Target: 2:1 banner, 1024x512, <300KB, no crop (contain with padding).
+  // Keep it deterministic: always output JPEG.
+  const base = sharp(input, { failOnError: false }).rotate();
+  let pipeline = base
+    .resize(1024, 512, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 1 } })
+    .jpeg({ quality: 82, mozjpeg: true });
+
+  let out = await pipeline.toBuffer();
+
+  // If still too big, reduce quality in steps.
+  if (out.length > 300 * 1024) {
+    for (const q of [72, 62, 52, 45]) {
+      out = await base
+        .resize(1024, 512, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 1 } })
+        .jpeg({ quality: q, mozjpeg: true })
+        .toBuffer();
+      if (out.length <= 300 * 1024) break;
+    }
+  }
+
+  return { out, meta: { bytes: out.length } };
+}
+
 async function uploadStreamToStorage(
   readableStream: any,
   filename: string,
@@ -192,16 +365,28 @@ async function uploadStreamToStorage(
       };
       if (size) headers['Content-Length'] = String(size);
 
-      const response = await fetch(url, {
-        method: 'PUT',
-        headers,
-        body: readableStream,
-        duplex: 'half',
-      } as any);
+      const response = (await Promise.race([
+        fetch(url, {
+          method: 'PUT',
+          headers,
+          body: readableStream,
+          duplex: 'half',
+        } as any),
+        new Promise<Response>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`[Bunny] Stream PUT timeout after ${BUNNY_PUT_TIMEOUT_MS}ms`)),
+            BUNNY_PUT_TIMEOUT_MS,
+          ),
+        ),
+      ])) as Response;
 
       if (!response.ok) {
         const text = await response.text().catch(() => '');
-        throw new Error(`Bunny stream upload failed: ${response.status} ${response.statusText} ${text}`);
+        const err: any = new Error(`Bunny stream upload failed: ${response.status} ${response.statusText} ${text}`);
+        err.bunnyStatus = response.status;
+        err.bunnyStatusText = response.statusText;
+        err.bunnyBodyPreview = text.slice(0, 500);
+        throw err;
       }
       console.log(`[Bunny] Stream uploaded: ${filename}`);
       return `${BUNNY_CDN_URL}/${filename}`;
@@ -223,9 +408,10 @@ const diskStorage = multer.diskStorage({
 
 const memStorage = multer.memoryStorage();
 
+/** Image / small media: stream to disk (avoid buffering large files in RAM). */
 const upload = multer({
-  storage: memStorage,
-  limits: { fileSize: 10 * 1024 * 1024 },
+  storage: diskStorage,
+  limits: { fileSize: 55 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     if (file.mimetype.startsWith("image/") || file.mimetype.startsWith("video/")) {
       cb(null, true);
@@ -235,12 +421,26 @@ const upload = multer({
   },
 });
 
+/** Admin push image: JPG/PNG only, max 1MB (OneSignal rich push). */
+const uploadPushNotifImage = multer({
+  storage: memStorage,
+  limits: { fileSize: 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok =
+      file.mimetype === "image/jpeg" ||
+      file.mimetype === "image/jpg" ||
+      file.mimetype === "image/png";
+    if (ok) cb(null, true);
+    else cb(new Error("Only JPG or PNG images are allowed (max 1MB)"));
+  },
+});
+
 const videoUpload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, uploadsDir),
     filename: (_req, file, cb) => cb(null, `temp-${randomUUID()}${path.extname(file.originalname)}`),
   }),
-  limits: { fileSize: 2048 * 1024 * 1024 },
+  limits: { fileSize: 200 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     if (file.mimetype.startsWith("video/")) {
       cb(null, true);
@@ -355,32 +555,47 @@ async function sendOTPSMS(phone: string, otp: string): Promise<{ success: boolea
 
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // ─── CORS Configuration ───
-  app.use((req, res, next) => {
-    const origin = req.headers.origin || '';
-    const allowedOrigins = [
-      'https://mobi-backend-491410.web.app',
-      'https://mobi-backend-491410.firebaseapp.com',
-      'https://mobile-repair-app-276b6.web.app',
-      'https://mobile-repair-app-276b6.firebaseapp.com',
-      'http://localhost:8081',
-      'http://localhost:3000',
-      'http://localhost:5000',
-    ];
-    
-    if (allowedOrigins.includes(origin) || origin.includes('replit.dev')) {
-      res.header('Access-Control-Allow-Origin', origin);
-      res.header('Access-Control-Allow-Credentials', 'true');
-      res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-      res.header('Access-Control-Allow-Headers', 'Content-Type, x-session-token, Authorization');
-      res.header('Access-Control-Max-Age', '3600');
+  // CORS is applied globally in server/app.ts (mobile-friendly + permissive HTTPS).
+
+  // ---- Debug: in-memory ring buffer (safe, no secrets) ----
+  const __reelsDebugBuf: any[] = [];
+  function __reelsDebugPush(payload: any) {
+    try {
+      __reelsDebugBuf.push(payload);
+      if (__reelsDebugBuf.length > 200) __reelsDebugBuf.splice(0, __reelsDebugBuf.length - 200);
+    } catch {
+      // ignore
     }
-    
-    if (req.method === 'OPTIONS') {
-      return res.sendStatus(200);
-    }
-    next();
+  }
+
+  // Temporary diagnostics endpoint for this debug session (no secrets/PII).
+  app.get("/api/diag/reels-debug", (_req, res) => {
+    return res.json({
+      success: true,
+      now: Date.now(),
+      count: __reelsDebugBuf.length,
+      items: __reelsDebugBuf.slice(-200),
+    });
   });
+
+  // Clear debug buffer (use before reproducing).
+  app.post("/api/diag/reels-debug/clear", (_req, res) => {
+    try {
+      __reelsDebugBuf.splice(0, __reelsDebugBuf.length);
+    } catch {
+      // ignore
+    }
+    return res.json({ success: true });
+  });
+
+  function __debugAppend(payload: any) {
+    try {
+      const line = JSON.stringify(payload) + "\n";
+      fs.appendFileSync(path.join(process.cwd(), "debug-2de8d4.log"), line, { encoding: "utf8" });
+    } catch {
+      // ignore
+    }
+  }
 
   // Ensure admin account exists and is always accessible
   (async () => {
@@ -471,6 +686,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ success: false, message: "Internal server error in admin middleware" });
     }
   };
+
+  async function recordBroadcastPushLog(entry: {
+    title: string;
+    body: string;
+    image?: string;
+    openPath?: string;
+    audience: string;
+    targetRole?: string;
+    recipientCount: number;
+    oneSignalId?: string;
+    error?: string;
+  }) {
+    try {
+      await db.insert(broadcastPushLogs).values({
+        id: randomUUID(),
+        title: entry.title,
+        body: entry.body,
+        image: entry.image || "",
+        openPath: entry.openPath || "",
+        audience: entry.audience,
+        targetRole: entry.targetRole || "",
+        recipientCount: entry.recipientCount,
+        oneSignalId: entry.oneSignalId || "",
+        error: entry.error || "",
+        createdAt: Date.now(),
+      });
+    } catch (e) {
+      console.warn("[OneSignal] recordBroadcastPushLog failed:", e);
+    }
+  }
 
   app.post("/api/admin/add-admin", adminMiddleware, async (req, res) => {
     try {
@@ -630,6 +875,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (cr) res.set('Content-Range', cr);
 
     res.status(response.status === 206 ? 206 : 200);
+    const body = response.body;
+    if (body && typeof (body as any).getReader === "function") {
+      try {
+        const nodeStream = Readable.fromWeb(body as any);
+        nodeStream.on("error", (err) => {
+          console.error("[Files] proxy stream error:", err);
+          if (!res.writableEnded) res.destroy();
+        });
+        nodeStream.pipe(res);
+        return;
+      } catch (pipeErr) {
+        console.warn("[Files] stream proxy fallback to buffer:", pipeErr);
+      }
+    }
     const arrayBuffer = await response.arrayBuffer();
     res.send(Buffer.from(arrayBuffer));
   }
@@ -689,7 +948,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
       const ext = path.extname(req.file.originalname) || '.jpg';
       const filename = `images/${randomUUID()}${ext}`;
-      const url = await uploadToStorage(req.file.buffer, filename);
+      const localPath = req.file.path;
+      const stream = fs.createReadStream(localPath);
+      let url: string;
+      try {
+        url = await uploadStreamToStorage(
+          stream,
+          filename,
+          req.file.mimetype || "application/octet-stream",
+          req.file.size,
+        );
+      } finally {
+        fs.unlink(localPath, () => {});
+      }
       res.json({ success: true, url });
     } catch (error) {
       console.error("[Upload] Error:", error);
@@ -702,7 +973,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
       const ext = path.extname(req.file.originalname) || '.jpg';
       const filename = `images/${randomUUID()}${ext}`;
-      const url = await uploadToStorage(req.file.buffer, filename);
+      const localPath = req.file.path;
+      const stream = fs.createReadStream(localPath);
+      let url: string;
+      try {
+        url = await uploadStreamToStorage(
+          stream,
+          filename,
+          req.file.mimetype || "application/octet-stream",
+          req.file.size,
+        );
+      } finally {
+        fs.unlink(localPath, () => {});
+      }
       res.json({ success: true, url });
     } catch (error: any) {
       console.error("[Upload] Error:", error);
@@ -710,31 +993,181 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-
-  // ─── Bunny Stream: Create video slot (returns videoId + TUS upload URL) ───
-  app.post("/api/bunny/create-video", async (req, res) => {
+  /**
+   * Large reel fallback: multipart video → server-side Bunny Stream upload (streaming PUT).
+   * Returns `videoId` + `playbackUrl` (mediadelivery embed) for consistent client behavior.
+   */
+  app.post("/api/reels/upload-video", videoUpload.single("video"), async (req, res) => {
     try {
-      if (!bunnyStreamAvailable) {
-        return res.status(503).json({ success: false, message: "Bunny Stream not configured" });
+      if (!req.file) {
+        return res.status(400).json({ success: false, message: "No video file" });
       }
-      const { title } = req.body;
-      if (!title) return res.status(400).json({ success: false, message: "Title is required" });
-
-      const response = await fetch(
-        `https://video.bunnycdn.com/library/${BUNNY_STREAM_LIBRARY_ID}/videos`,
+      const userId = String((req.body?.userId || req.query?.userId || "") as any).trim();
+      console.log(
+        "UPLOAD START",
         {
+          userId: userId || "(missing)",
+          name: req.file.originalname,
+          mime: req.file.mimetype,
+          size: req.file.size,
+          sizeMB: Math.round((req.file.size || 0) / 1024 / 1024),
+        },
+      );
+      const localPath = req.file.path;
+      try {
+        if (!bunnyStreamAvailable) {
+          return res.status(503).json({
+            success: false,
+            message: "Bunny Stream not configured. Reels require Bunny Stream encoding for reliable playback.",
+          });
+        }
+
+        // 1) Create Bunny Stream video entry
+        const title =
+          typeof req.body?.title === "string" && req.body.title.trim()
+            ? req.body.title.trim().slice(0, 500)
+            : "reel-upload";
+        const bunnyCreateUrl = `https://video.bunnycdn.com/library/${BUNNY_STREAM_LIBRARY_ID}/videos`;
+        console.log("[BunnyStream] create-video (fallback)", { title, userId: userId || "(missing)" });
+        const createRes = await fetch(bunnyCreateUrl, {
           method: "POST",
+          signal: AbortSignal.timeout(60000),
           headers: {
             AccessKey: BUNNY_STREAM_API_KEY,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ title }),
+        });
+        const createTxt = await createRes.text().catch(() => "");
+        console.log("[BunnyStream] create-video response", {
+          status: createRes.status,
+          ok: createRes.ok,
+          bodyPreview: createTxt.slice(0, 400),
+        });
+        if (!createRes.ok) {
+          return res.status(502).json({
+            success: false,
+            message: "Bunny Stream create-video failed",
+            bunnyStatus: createRes.status,
+            bunnyError: createTxt.slice(0, 2000),
+          });
         }
-      );
+        let createJson: any = {};
+        try {
+          createJson = JSON.parse(createTxt || "{}");
+        } catch {}
+        const videoId = String(createJson?.guid || "").trim();
+        if (!videoId) {
+          return res.status(502).json({ success: false, message: "Bunny Stream did not return a videoId" });
+        }
+
+        // 2) Upload file to Bunny Stream via streaming PUT (no buffering)
+        const putUrl = `https://video.bunnycdn.com/library/${BUNNY_STREAM_LIBRARY_ID}/videos/${videoId}`;
+        console.log("[BunnyStream] upload PUT start", { videoId, size: req.file.size });
+        const putRes = await Promise.race([
+          fetch(putUrl, {
+            method: "PUT",
+            headers: {
+              AccessKey: BUNNY_STREAM_API_KEY,
+              "Content-Type": req.file.mimetype || "application/octet-stream",
+              "Content-Length": String(req.file.size || 0),
+            },
+            body: fs.createReadStream(localPath),
+            duplex: "half",
+          } as any),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`[BunnyStream] PUT timeout after ${BUNNY_PUT_TIMEOUT_MS}ms`)), BUNNY_PUT_TIMEOUT_MS),
+          ),
+        ]) as Response;
+        const putTxt = await putRes.text().catch(() => "");
+        console.log("[BunnyStream] upload PUT response", {
+          status: putRes.status,
+          ok: putRes.ok,
+          bodyPreview: putTxt.slice(0, 400),
+        });
+        if (!putRes.ok && putRes.status !== 201) {
+          return res.status(502).json({
+            success: false,
+            message: "Bunny Stream upload failed",
+            bunnyStatus: putRes.status,
+            bunnyError: putTxt.slice(0, 2000),
+            videoId,
+          });
+        }
+
+        const bunnyUrls = getBunnyStreamUrls(videoId, BUNNY_STREAM_LIBRARY_ID);
+        console.log("UPLOAD SUCCESS", { mode: "bunny_stream_put", videoId });
+        try {
+          const finalMedia = await waitForBunnyPlayableUrl(videoId, { libraryId: BUNNY_STREAM_LIBRARY_ID });
+          return res.json({
+            success: true,
+            videoId,
+            playbackUrl: finalMedia.videoUrl,
+            mp4Url: finalMedia.videoUrl,
+            directUrl: finalMedia.videoUrl,
+            hlsUrl: bunnyUrls.hlsUrl,
+            thumbnailUrl: finalMedia.thumbnailUrl,
+            mode: "bunny_stream_put",
+          });
+        } catch (processingError: any) {
+          const processingMsg = String(processingError?.message || processingError || "");
+          const processingStatusCode = /encoding failed/i.test(processingMsg)
+            ? 422
+            : /still processing/i.test(processingMsg)
+              ? 409
+              : 502;
+          return res.status(processingStatusCode).json({
+            success: false,
+            videoId,
+            message: processingMsg || "Video is still processing. Please try again shortly.",
+            playbackUrl: bunnyUrls.mp4Url,
+            mp4Url: bunnyUrls.mp4Url,
+            directUrl: bunnyUrls.hlsUrl,
+            hlsUrl: bunnyUrls.hlsUrl,
+            thumbnailUrl: bunnyUrls.thumbnailUrl,
+            mode: "bunny_stream_put",
+          });
+        }
+      } finally {
+        fs.unlink(localPath, () => {});
+      }
+    } catch (error: any) {
+      console.error("UPLOAD ERROR", error);
+      return res.status(500).json({ success: false, message: error?.message || "Video upload failed" });
+    }
+  });
+
+
+  // ─── Bunny Stream: Create video entry only (no file upload). Client uploads via TUS to Bunny. ───
+  app.post("/api/bunny/create-video", async (req, res) => {
+    try {
+      if (!bunnyStreamAvailable) {
+        return res.status(503).json({ success: false, message: "Bunny Stream not configured" });
+      }
+      const title =
+        typeof req.body?.title === "string" && req.body.title.trim().length > 0
+          ? req.body.title.trim().slice(0, 500)
+          : "temp-video";
+
+      const bunnyCreateUrl = `https://video.bunnycdn.com/library/${BUNNY_STREAM_LIBRARY_ID}/videos`;
+      const response = await fetch(bunnyCreateUrl, {
+        method: "POST",
+        signal: AbortSignal.timeout(60000),
+        headers: {
+          AccessKey: BUNNY_STREAM_API_KEY,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ title }),
+      });
       if (!response.ok) {
-        const txt = await response.text().catch(() => '');
-        console.error(`[BunnyStream] Create video failed: ${response.status} ${txt}`);
-        return res.status(502).json({ success: false, message: "Failed to create Bunny Stream video" });
+        const txt = await response.text().catch(() => "");
+        console.error(`[BunnyStream] Create video failed: ${response.status} ${txt.slice(0, 2000)}`);
+        return res.status(502).json({
+          success: false,
+          message: "Failed to create Bunny Stream video",
+          bunnyStatus: response.status,
+          bunnyError: txt.slice(0, 2000),
+        });
       }
       const data = await response.json() as any;
       const videoId = data.guid;
@@ -748,11 +1181,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .update(BUNNY_STREAM_LIBRARY_ID + BUNNY_STREAM_API_KEY + expires + videoId)
         .digest("hex");
 
-      const playbackUrl = `https://iframe.mediadelivery.net/embed/${BUNNY_STREAM_LIBRARY_ID}/${videoId}`;
-      const directUrl = `https://vz-${BUNNY_STREAM_LIBRARY_ID}.b-cdn.net/${videoId}/playlist.m3u8`;
+      const bunnyUrls = getBunnyStreamUrls(videoId, BUNNY_STREAM_LIBRARY_ID);
       
       console.log(`[BunnyStream] Created video slot: ${videoId}, expires: ${expires}`);
-      
+
+      // NOTE: Never send BUNNY_STREAM_API_KEY to the client. TUS uses time-limited signature only.
+      // Simple PUT to library/.../videos/{id} with AccessKey must stay server-side (see Bunny docs).
       res.json({
         success: true,
         videoId,
@@ -760,8 +1194,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         signature,
         expires,
         uploadUrl: "https://video.bunnycdn.com/tusupload",
-        playbackUrl,
-        directUrl,
+        playbackUrl: bunnyUrls.mp4Url,
+        mp4Url: bunnyUrls.mp4Url,
+        directUrl: bunnyUrls.hlsUrl,
+        hlsUrl: bunnyUrls.hlsUrl,
+        embedUrl: bunnyUrls.embedUrl,
       });
     } catch (error: any) {
       console.error("[BunnyStream] create-video error:", error?.message || error);
@@ -798,20 +1235,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { videoId } = req.params;
       const response = await fetch(
         `https://video.bunnycdn.com/library/${BUNNY_STREAM_LIBRARY_ID}/videos/${videoId}`,
-        { headers: { AccessKey: BUNNY_STREAM_API_KEY } }
+        {
+          headers: { AccessKey: BUNNY_STREAM_API_KEY },
+          signal: AbortSignal.timeout(45000),
+        },
       );
       if (!response.ok) {
-        return res.status(502).json({ success: false, message: "Failed to get video status" });
+        const txt = await response.text().catch(() => "");
+        console.error(`[BunnyStream] video-status failed: ${response.status} ${txt.slice(0, 500)}`);
+        return res.status(502).json({
+          success: false,
+          message: "Failed to get video status",
+          bunnyStatus: response.status,
+          bunnyError: txt.slice(0, 1000),
+        });
       }
       const data = await response.json() as any;
+      const bunnyUrls = getBunnyStreamUrls(videoId, BUNNY_STREAM_LIBRARY_ID);
       res.json({
         success: true,
         status: data.status,
         encodeProgress: data.encodeProgress,
         length: data.length,
         thumbnailUrl: data.thumbnailUrl,
-        playbackUrl: `https://iframe.mediadelivery.net/embed/${BUNNY_STREAM_LIBRARY_ID}/${videoId}`,
-        directUrl: `https://vz-${BUNNY_STREAM_LIBRARY_ID}.b-cdn.net/${videoId}/playlist.m3u8`,
+        playbackUrl: bunnyUrls.mp4Url,
+        mp4Url: bunnyUrls.mp4Url,
+        directUrl: bunnyUrls.hlsUrl,
+        hlsUrl: bunnyUrls.hlsUrl,
+        embedUrl: bunnyUrls.embedUrl,
       });
     } catch (error: any) {
       console.error("[BunnyStream] video-status error:", error?.message || error);
@@ -2059,23 +2510,60 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
   // ─── OneSignal clean count + send routes ──────────────────────────────────────
   app.get("/api/notifications/count", async (_req, res) => {
     try {
-      const count = await getDeviceCount();
+      if (!isOneSignalConfigured()) {
+        return res.status(500).json({ count: 0, error: "OneSignal env not configured" });
+      }
+      const count = await getOneSignalSubscriberCount();
       return res.json({ count });
     } catch (error) {
       console.error('[OneSignal] /api/notifications/count error:', error);
-      return res.status(500).json({ count: 0 });
+      return res.status(500).json({ count: 0, error: (error as any)?.message || "Internal Server Error" });
+    }
+  });
+
+  // OneSignal quick health check (env + auth)
+  app.get("/api/notifications/health", async (_req, res) => {
+    try {
+      if (!isOneSignalConfigured()) {
+        return res.status(500).json({ success: false, configured: false, message: "Missing ONESIGNAL_APP_ID / ONESIGNAL_REST_API_KEY" });
+      }
+      const count = await getOneSignalSubscriberCount();
+      return res.status(200).json({ success: true, configured: true, subscriberCount: count });
+    } catch (error) {
+      console.error("[OneSignal] /api/notifications/health error:", error);
+      return res.status(500).json({ success: false, configured: true, error: (error as any)?.message || "Internal Server Error" });
     }
   });
 
   app.post("/api/notifications/send", async (req, res) => {
     try {
-      const { title, message } = req.body;
-      if (!title || !message) return res.status(400).json({ success: false, message: "title and message required" });
-      const result = await sendNotification(title, message, { type: 'admin_broadcast' });
-      return res.json({ success: true, result });
+      const title = String(req.body?.title ?? "").trim();
+      const message = String(req.body?.message ?? "").trim();
+      const image = typeof req.body?.image === "string" ? req.body.image.trim() : "";
+      const navPath = typeof req.body?.path === "string" ? req.body.path.trim() : "";
+
+      if (!title || !message) {
+        return res.status(400).json({ success: false, message: "title and message must not be empty" });
+      }
+
+      const subscriptionIdsRaw = req.body?.subscriptionIds;
+      const subscriptionIds = Array.isArray(subscriptionIdsRaw) ? subscriptionIdsRaw : undefined;
+      const imgOpt = { imageUrl: image || undefined };
+      const dataPayload: Record<string, string> = { type: "admin_broadcast" };
+      if (navPath) dataPayload.path = navPath;
+
+      const sendResult = subscriptionIds
+        ? await sendNotificationToSubscriptionIds(title, message, dataPayload, subscriptionIds, imgOpt)
+        : await sendNotification(title, message, dataPayload, undefined, imgOpt);
+
+      return res.status(200).json({
+        success: true,
+        recipients: sendResult.recipients,
+        oneSignalId: sendResult.id || undefined,
+      });
     } catch (error) {
-      console.error('[OneSignal] /api/notifications/send error:', error);
-      return res.status(500).json({ success: false });
+      console.error("[OneSignal] /api/notifications/send error:", error);
+      return res.status(500).json({ success: false, error: (error as any)?.message || "Internal Server Error" });
     }
   });
 
@@ -2530,13 +3018,11 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
       const limit = Math.min(parseInt((req.query.limit as string) || '50'), 100);
       const offset = parseInt((req.query.offset as string) || '0');
       console.log(`[Posts] Fetching posts (limit=${limit}, offset=${offset})...`);
-      const thirtyDaysAgoMs = Date.now() - (30 * 24 * 60 * 60 * 1000);
       const allPosts = await db.select().from(posts)
-        .where(gte(posts.createdAt, thirtyDaysAgoMs))
         .orderBy(desc(posts.createdAt))
         .limit(limit)
         .offset(offset);
-      console.log("[Posts] Found", allPosts.length, "posts (within 30 days)");
+      console.log("[Posts] Found", allPosts.length, "posts");
       const parsed = allPosts.map(p => {
         try {
           return {
@@ -2574,12 +3060,12 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
 
       const postId = id || randomUUID();
       const now = Date.now();
-      const BACKEND_BASE = process.env.REPLIT_DEV_DOMAIN
-        ? `https://${process.env.REPLIT_DEV_DOMAIN}`
-        : apiPublicBase() || "http://127.0.0.1:5000";
+      const BACKEND_BASE =
+        apiPublicBase() ||
+        (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : "");
       const cleanImages = sanitizeImageUrls(images || []).map(img => {
         if (img.startsWith('http')) return img;
-        return `${BACKEND_BASE}${img}`;
+        return BACKEND_BASE ? `${BACKEND_BASE}${img}` : img;
       });
       console.log('[Posts] Cleaned images:', { original: images?.length || 0, cleaned: cleanImages.length, urls: cleanImages });
       const cleanVideoUrl = sanitizeImageUrl(videoUrl || "");
@@ -2595,6 +3081,7 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
         category: category || "repair",
         likes: "[]",
         comments: "[]",
+        views: 0,
         createdAt: now,
       });
 
@@ -2610,15 +3097,17 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
         category: category || "repair",
         likes: [],
         comments: [],
+        views: 0,
         createdAt: now,
       };
 
       notifyNewPost(postText || '', userName, userId).catch(() => {});
 
       return res.json({ success: true, post: newPost });
-    } catch (error) {
+    } catch (error: any) {
       console.error("[Posts] Create error:", error);
-      return res.status(500).json({ success: false, message: "Failed to create post" });
+      const msg = error?.message || String(error);
+      return res.status(500).json({ success: false, message: msg || "Failed to create post" });
     }
   });
 
@@ -2672,10 +3161,24 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
 
   app.post("/api/posts/:id/view", async (req, res) => {
     try {
-      const { userId } = req.body;
-      const postId = req.params.id;
-      const [post] = await db.select().from(posts).where(eq(posts.id, postId));
-      if (!post) return res.status(404).json({ success: false, message: "Post not found" });
+      const postId = String(req.params.id || "").trim();
+      if (!postId) {
+        return res.status(400).json({ success: false, message: "Post ID required" });
+      }
+
+      // Single atomic UPDATE … RETURNING (no select-then-update; avoids hanging without res.json)
+      const updated = await db
+        .update(posts)
+        .set({ views: sql`${posts.views} + 1` })
+        .where(eq(posts.id, postId))
+        .returning({ views: posts.views });
+
+      const row = updated[0];
+      if (!row) {
+        return res.status(404).json({ success: false, message: "Post not found" });
+      }
+
+      return res.json({ success: true, views: row.views });
     } catch (error) {
       console.error("[Posts] View error:", error);
       return res.status(500).json({ success: false, message: "Failed to track view" });
@@ -3039,7 +3542,13 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
               notifyUser(recipientId, {
                 title: senderName,
                 body: msgPreview,
-                data: { type: 'chat_message', conversationId },
+                data: {
+                  type: 'chat_message',
+                  conversationId: String(conversationId),
+                  userId: String(senderId),
+                  path: `/chat/${conversationId}`,
+                },
+                image: cleanImage.startsWith('https://') ? cleanImage : undefined,
               }).catch(() => {});
             }
           }
@@ -3051,8 +3560,40 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
         
         // Fallback: Save to PostgreSQL
         try {
-          await db.insert(messages).values(newMsg);
+          await db.insert(messages).values({
+            id,
+            conversationId,
+            senderId,
+            senderName,
+            text: cleanText,
+            image: cleanImage,
+            createdAt: now,
+          });
           savedSuccessfully = true;
+
+          const [convoRow] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
+          if (convoRow) {
+            const recipientId =
+              convoRow.participant1Id === senderId ? convoRow.participant2Id : convoRow.participant1Id;
+            if (recipientId && recipientId !== senderId) {
+              const msgPreview = cleanImage
+                ? cleanText || '📷 Photo'
+                : cleanVideo
+                  ? cleanText || '🎥 Video'
+                  : cleanText.slice(0, 80);
+              notifyUser(recipientId, {
+                title: senderName,
+                body: msgPreview,
+                data: {
+                  type: 'chat_message',
+                  conversationId: String(conversationId),
+                  userId: String(senderId),
+                  path: `/chat/${conversationId}`,
+                },
+                image: cleanImage.startsWith('https://') ? cleanImage : undefined,
+              }).catch(() => {});
+            }
+          }
         } catch (dbError: any) {
           console.error("[Chat] Both Firestore and PostgreSQL failed:", dbError?.message);
           return res.status(500).json({ success: false, message: "Failed to save message" });
@@ -3115,24 +3656,40 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
   app.get("/api/reels", async (_req, res) => {
     try {
       const allReels = await db.select().from(reels).orderBy(desc(reels.createdAt));
-      const mapped = allReels.map(r => {
+      const mappedRaw = allReels
+        .map((r: any) => {
+          const normalizedVideoUrl = normalizePlayableReelVideoUrl(r?.videoUrl);
+          if (!normalizedVideoUrl) return null;
+          return { ...r, videoUrl: normalizedVideoUrl };
+        })
+        .filter((r: any) => !!r)
+        .map((r: any) => {
         let thumbnailUrl = r.thumbnailUrl || '';
         // Auto-derive Bunny Stream thumbnail if not stored
         if (!thumbnailUrl && r.videoUrl) {
           const cdnMatch = r.videoUrl.match(/b-cdn\.net\/([a-f0-9-]{36})\//);
           const iframeMatch = r.videoUrl.match(/embed\/\d+\/([a-f0-9-]{36})/);
           const mediaMatch = r.videoUrl.match(/mediadelivery\.net\/[^/]+\/([a-f0-9-]{36})/);
+          const libFromUrl = r.videoUrl.match(/vz-(\d+)\.b-cdn\.net/)?.[1];
           const videoId = (cdnMatch?.[1] || iframeMatch?.[1] || mediaMatch?.[1]) ?? '';
-          if (videoId) thumbnailUrl = `https://vz-610561.b-cdn.net/${videoId}/thumbnail.jpg`;
+          const lib = libFromUrl || BUNNY_STREAM_LIBRARY_ID || "610561";
+          if (videoId) thumbnailUrl = `https://vz-${lib}.b-cdn.net/${videoId}/thumbnail.jpg`;
         }
         return {
           ...r,
           thumbnailUrl,
-          likes: JSON.parse(r.likes || "[]"),
-          comments: JSON.parse(r.comments || "[]"),
+          likes: (() => { try { return JSON.parse(r.likes || "[]"); } catch { return []; } })(),
+          comments: (() => { try { return JSON.parse(r.comments || "[]"); } catch { return []; } })(),
         };
       });
-      return res.json(mapped);
+      const mapped = await Promise.all(mappedRaw.map(async (r: any) => {
+        const ref = getBunnyVideoRefFromUrl(String(r?.videoUrl || ""));
+        if (!ref || !bunnyStreamAvailable) return r;
+        const playable = await isBunnyVideoPlayable(ref.videoId, ref.libraryId);
+        if (!playable) return null;
+        return r;
+      }));
+      return res.json(mapped.filter((r: any) => !!r));
     } catch (error) {
       console.error("[Reels] List error:", error);
       return res.status(500).json({ success: false, message: "Failed to list reels" });
@@ -3141,10 +3698,90 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
 
   app.post("/api/reels", async (req, res) => {
     try {
-      const { userId, userName, userAvatar, title, description, videoUrl, thumbnailUrl } = req.body;
-      if (!userId || !videoUrl) {
-        return res.status(400).json({ success: false, message: "userId and videoUrl required" });
+      const {
+        userId,
+        userName,
+        userAvatar,
+        title,
+        description,
+        videoUrl: bodyVideoUrl,
+        thumbnailUrl,
+        videoId: bodyVideoId,
+        caption,
+      } = req.body;
+      const libId = BUNNY_STREAM_LIBRARY_ID || "";
+      let videoUrl = typeof bodyVideoUrl === "string" ? bodyVideoUrl.trim() : "";
+      const vid =
+        typeof bodyVideoId === "string" && /^[a-f0-9-]{36}$/i.test(bodyVideoId.trim())
+          ? bodyVideoId.trim()
+          : "";
+      if (!videoUrl && vid) {
+        if (!libId) {
+          return res.status(503).json({ success: false, message: "Bunny Stream not configured" });
+        }
+        try {
+          const finalMedia = await waitForBunnyPlayableUrl(vid, { libraryId: libId });
+          videoUrl = finalMedia.videoUrl;
+          if (!thumbnailUrl) {
+            req.body.thumbnailUrl = finalMedia.thumbnailUrl;
+          }
+        } catch (error: any) {
+          const msg = String(error?.message || error || "");
+          const statusCode = /encoding failed/i.test(msg)
+            ? 422
+            : /still processing/i.test(msg)
+              ? 409
+              : 502;
+          return res.status(statusCode).json({
+            success: false,
+            message: msg || "Failed to finalize Bunny playback URL",
+          });
+        }
       }
+      videoUrl = normalizePlayableReelVideoUrl(videoUrl, libId || BUNNY_STREAM_LIBRARY_ID);
+
+      if (!userId || !videoUrl) {
+        return res.status(400).json({
+          success: false,
+          message: "userId and videoUrl (or valid videoId + library) required",
+        });
+      }
+      if (!isPlayableReelVideoUrl(videoUrl)) {
+        return res.status(400).json({
+          success: false,
+          message: "videoUrl must be a final playable .mp4 or .m3u8 URL",
+        });
+      }
+
+      const bunnyRef = getBunnyVideoRefFromUrl(videoUrl);
+      if (bunnyRef && bunnyStreamAvailable) {
+        try {
+          const status = await fetchBunnyVideoStatus(bunnyRef.videoId, bunnyRef.libraryId);
+          const s = Number(status?.status);
+          if (s === 4) {
+            return res.status(422).json({
+              success: false,
+              message: "Video encoding failed. Please upload the reel again.",
+            });
+          }
+          if (s !== 3) {
+            return res.status(409).json({
+              success: false,
+              message: "Video is still processing. Please try again shortly.",
+            });
+          }
+        } catch (verifyErr: any) {
+          return res.status(502).json({
+            success: false,
+            message: verifyErr?.message || "Failed to verify Bunny video status",
+          });
+        }
+      }
+
+      const cap = typeof caption === "string" ? caption.trim() : "";
+      const resolvedTitle = (typeof title === "string" ? title.trim() : "") || (cap ? cap.slice(0, 100) : "");
+      const resolvedDescription =
+        (typeof description === "string" ? description.trim() : "") || (cap ? cap : "");
 
       const id = randomUUID();
       const now = Date.now();
@@ -3154,33 +3791,80 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
         userId,
         userName: userName || "",
         userAvatar: userAvatar || "",
-        title: title || "",
-        description: description || "",
+        title: resolvedTitle,
+        description: resolvedDescription,
         videoUrl,
-        thumbnailUrl: thumbnailUrl || "",
+        thumbnailUrl: req.body.thumbnailUrl || thumbnailUrl || "",
         likes: "[]",
         comments: "[]",
+        views: 0,
         createdAt: now,
       });
 
       const reel = {
         id, userId, userName: userName || "", userAvatar: userAvatar || "",
-        title: title || "", description: description || "", videoUrl,
-        thumbnailUrl: thumbnailUrl || "", likes: [], comments: [], views: 0,
+        title: resolvedTitle, description: resolvedDescription, videoUrl,
+        thumbnailUrl: req.body.thumbnailUrl || thumbnailUrl || "", likes: [], comments: [], views: 0,
         createdAt: now,
       };
 
-      // Fire OneSignal push notification for new reel (non-blocking)
-      sendNotification(
-        '🎬 New Reel',
-        `${userName || 'Someone'} posted a new reel${title ? `: ${title}` : ''}`,
-        { type: 'new_reel', reelId: id, userId }
-      ).catch(e => console.error("[Reels] Push notification error:", e));
+      let reelPushThumb = String(thumbnailUrl || "").trim();
+      if (!reelPushThumb && videoUrl) {
+        const cdnMatch = String(videoUrl).match(/b-cdn\.net\/([a-f0-9-]{36})\//);
+        const iframeMatch = String(videoUrl).match(/embed\/\d+\/([a-f0-9-]{36})/);
+        const mediaMatch = String(videoUrl).match(/mediadelivery\.net\/[^/]+\/([a-f0-9-]{36})/);
+        const pushVideoId = (cdnMatch?.[1] || iframeMatch?.[1] || mediaMatch?.[1]) ?? "";
+        const pushLib = libId || BUNNY_STREAM_LIBRARY_ID || "610561";
+        if (pushVideoId) reelPushThumb = `https://vz-${pushLib}.b-cdn.net/${pushVideoId}/thumbnail.jpg`;
+      }
+
+      // Notify profile "followers" (users who liked this creator's profile — profileLikes on creator)
+      (async () => {
+        try {
+          const [creator] = await db
+            .select({ profileLikes: profiles.profileLikes })
+            .from(profiles)
+            .where(eq(profiles.id, userId))
+            .limit(1);
+          let followerIds: string[] = [];
+          try {
+            const raw = creator?.profileLikes || "[]";
+            const arr = JSON.parse(raw);
+            if (Array.isArray(arr)) {
+              followerIds = arr.map((x: unknown) => String(x || "").trim()).filter((fid) => fid && fid !== userId);
+            }
+          } catch {
+            followerIds = [];
+          }
+          const imgOpt = reelPushThumb.startsWith("https://") ? { imageUrl: reelPushThumb } : {};
+          const data = {
+            type: "new_reel",
+            reelId: id,
+            userId: String(userId),
+            path: "/(tabs)/reels-tab",
+          };
+          if (followerIds.length === 0) {
+            console.log("[Reels] No profile followers to notify for user", userId.slice(0, 8));
+            return;
+          }
+          const out = await sendNotification(
+            "🎬 New Reel",
+            `${userName || "Someone"} posted a new reel${title ? `: ${title}` : ""}`,
+            data,
+            followerIds,
+            imgOpt,
+          );
+          console.log("[Reels] Push to followers:", followerIds.length, "recipients=", out.recipients, "id=", out.id || "-");
+        } catch (e) {
+          console.error("[Reels] Push notification error:", e);
+        }
+      })();
 
       return res.json({ success: true, reel });
-    } catch (error) {
+    } catch (error: any) {
       console.error("[Reels] Create error:", error);
-      return res.status(500).json({ success: false, message: "Failed to create reel" });
+      const msg = error?.message || String(error);
+      return res.status(500).json({ success: false, message: msg || "Failed to create reel" });
     }
   });
 
@@ -3285,7 +3969,7 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
 
   const diskVideoUpload = multer({
     storage: diskStorage,
-    limits: { fileSize: 2048 * 1024 * 1024 },
+    limits: { fileSize: 100 * 1024 * 1024 },
     fileFilter: (_req, file, cb) => {
       if (file.mimetype.startsWith("video/")) {
         cb(null, true);
@@ -3295,11 +3979,16 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
     },
   });
 
+  /** @deprecated Large videos should use Bunny Stream TUS from the client (`/api/bunny/create-video` + direct TUS). */
   app.post("/api/upload-video", (req, res, next) => {
+    res.setHeader("Deprecation", "true");
+    console.warn(
+      "[DEPRECATED] POST /api/upload-video — multipart video through the API is legacy; prefer Bunny Stream direct upload.",
+    );
     diskVideoUpload.single("video")(req, res, (err) => {
       if (err) {
         if (err.code === "LIMIT_FILE_SIZE") {
-          return res.status(413).json({ success: false, message: "Video file is too large. Maximum size is 2GB." });
+          return res.status(413).json({ success: false, message: "Video file is too large. Maximum size is 100 MB." });
         }
         return res.status(400).json({ success: false, message: err.message || "Upload error" });
       }
@@ -3332,6 +4021,7 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
 
         const bunnyRes = await fetch(bunnyUrl, {
           method: 'PUT',
+          signal: AbortSignal.timeout(BUNNY_PUT_TIMEOUT_MS),
           headers: {
             'AccessKey': BUNNY_STORAGE_API_KEY,
             'Content-Type': 'application/octet-stream',
@@ -3345,8 +4035,12 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
 
         if (!bunnyRes.ok) {
           const errText = await bunnyRes.text().catch(() => '');
-          console.error(`[Upload] Bunny upload failed: ${bunnyRes.status} ${errText}`);
-          return res.status(500).json({ success: false, message: "Video upload to CDN failed" });
+          console.error(`[Upload] Bunny upload failed: ${bunnyRes.status} ${errText.slice(0, 2000)}`);
+          return res.status(500).json({
+            success: false,
+            message: "Video upload to CDN failed",
+            detail: errText.slice(0, 1000),
+          });
         }
 
         const videoUrl = `${BUNNY_CDN_URL}/${reelStorageName}`;
@@ -3360,10 +4054,11 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
         console.log(`[Upload] Video saved locally: ${videoUrl} (${req.file.size} bytes)`);
         return res.json({ success: true, url: videoUrl });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("[Upload] Video error:", error);
       if (req.file?.path) fs.unlink(req.file.path, () => {});
-      return res.status(500).json({ success: false, message: "Video upload failed" });
+      const msg = error?.message || String(error);
+      return res.status(500).json({ success: false, message: msg || "Video upload failed" });
     }
   });
 
@@ -3576,7 +4271,7 @@ Respond with this exact JSON format:
               title: `📚 New Course Available!`,
               body: `"${title}" by ${teacherName || 'a teacher'} — Enroll now!`,
               data: { type: 'new_course', courseId },
-            }, teacherId);
+            });
           } catch (e) { console.warn('[Push] New course notify failed:', e); }
         })();
       }
@@ -3623,7 +4318,7 @@ Respond with this exact JSON format:
               title: `📚 New Course Available!`,
               body: `"${updated.title}" by ${updated.teacherName || 'a teacher'} — Enroll now!`,
               data: { type: 'new_course', courseId: id },
-            }, updated.teacherId || '');
+            });
           } catch (e) { console.warn('[Push] Course publish notify failed:', e); }
         })();
       }
@@ -3776,7 +4471,7 @@ Respond with this exact JSON format:
               title: `🎬 New Video Added!`,
               body: `"${title}" added to "${courseRow2.title}" by ${courseRow2.teacherName || 'a teacher'}`,
               data: { type: 'new_video', courseId },
-            }, courseRow2.teacherId || '');
+            });
           }
         } catch (e) {
           console.warn('[Push] Failed to notify about new video:', e);
@@ -6689,29 +7384,142 @@ Respond ONLY with a valid JSON array (no markdown, no code blocks):
     }
   });
 
+  app.post("/api/admin/upload-push-image", adminMiddleware, uploadPushNotifImage.single("image"), async (req, res) => {
+    try {
+      if (!req.file?.buffer?.length) {
+        return res.status(400).json({ success: false, message: "No image (JPG/PNG, max 1MB)" });
+      }
+      const ext = (path.extname(req.file.originalname) || ".jpg").toLowerCase();
+      if (![".jpg", ".jpeg", ".png"].includes(ext)) {
+        return res.status(400).json({ success: false, message: "Only JPG or PNG" });
+      }
+      const inputBytes = req.file.buffer.length;
+      const { out, meta } = await normalizePushBannerJpeg(req.file.buffer);
+      const filename = `push-admin/${randomUUID()}.jpg`;
+      const url = await uploadToStorage(out, filename);
+      console.log("[PushImage] normalized banner", {
+        inKB: Math.round(inputBytes / 1024),
+        outKB: Math.round(meta.bytes / 1024),
+        urlHost: (() => {
+          try { return new URL(url).host; } catch { return ""; }
+        })(),
+      });
+      res.json({ success: true, url, width: 1024, height: 512, bytes: meta.bytes });
+    } catch (error: any) {
+      console.error("[Admin] upload-push-image:", error);
+      const msg = String(error?.message || "Upload failed");
+      const status = msg.includes("Only JPG") || msg.includes("max 1MB") ? 400 : 500;
+      res.status(status).json({ success: false, message: msg });
+    }
+  });
+
+  /** Alias for integrations: same as notify-all; accepts `message` as body text. */
+  app.post("/api/send-notification", adminMiddleware, async (req, res) => {
+    try {
+      const title = String(req.body?.title ?? "").trim();
+      const body = String(req.body?.message ?? req.body?.body ?? "").trim();
+      const image = typeof req.body?.image === "string" ? req.body.image.trim() : "";
+      const navPath = typeof req.body?.path === "string" ? req.body.path.trim() : "";
+      if (!title || !body) {
+        return res.status(400).json({ success: false, message: "title and message (or body) required" });
+      }
+      const dataPayload: Record<string, string> = { type: "admin_broadcast" };
+      if (navPath) dataPayload.path = navPath;
+      const result = await notifyUsersByRole("all", { title, body, data: dataPayload, image: image || undefined });
+      await recordBroadcastPushLog({
+        title,
+        body,
+        image,
+        openPath: navPath,
+        audience: "all",
+        targetRole: "",
+        recipientCount: result.recipients,
+        oneSignalId: result.id,
+      });
+      res.json({ success: true, sent: result.recipients, oneSignalId: result.id });
+    } catch (error: any) {
+      console.error("[Admin] /api/send-notification:", error);
+      try {
+        await recordBroadcastPushLog({
+          title: String(req.body?.title ?? "").trim(),
+          body: String(req.body?.message ?? req.body?.body ?? "").trim(),
+          image: typeof req.body?.image === "string" ? req.body.image.trim() : "",
+          openPath: typeof req.body?.path === "string" ? req.body.path.trim() : "",
+          audience: "all",
+          recipientCount: 0,
+          error: error?.message || "send failed",
+        });
+      } catch {
+        /* ignore */
+      }
+      res.status(500).json({ success: false, message: error?.message || "Failed to send" });
+    }
+  });
+
+  app.get("/api/admin/push-broadcast-history", adminMiddleware, async (_req, res) => {
+    try {
+      const rows = await db.select().from(broadcastPushLogs).orderBy(desc(broadcastPushLogs.createdAt)).limit(100);
+      return res.json({ success: true, items: rows });
+    } catch (e: any) {
+      console.error("[Admin] push-broadcast-history:", e);
+      return res.status(500).json({ success: false, message: e?.message || "Failed" });
+    }
+  });
+
   app.post("/api/admin/notify-all", adminMiddleware, async (req, res) => {
     try {
-      const { title, body } = req.body;
+      const { title, body, image, path: openPath } = req.body;
       if (!title || !body) return res.status(400).json({ success: false, message: "Title and body required" });
+      const imageUrl = typeof image === "string" ? image.trim() : "";
+      const pathStr = typeof openPath === "string" ? openPath.trim() : "";
+      const dataPayload: Record<string, string> = { type: "admin_broadcast" };
+      if (pathStr) dataPayload.path = pathStr;
 
-      console.log('[OneSignal] Admin notify-all:', title);
-      const sent = await notifyUsersByRole('all', { title, body, data: { type: 'admin_broadcast' } });
-      console.log('[OneSignal] notify-all sent:', sent);
+      console.log('[OneSignal] Admin notify-all:', title, imageUrl ? '(with image)' : '(default image)', pathStr ? `(open: ${pathStr})` : '');
+      const result = await notifyUsersByRole("all", { title, body, data: dataPayload, image: imageUrl || undefined });
+      console.log('[OneSignal] notify-all sent:', result.recipients, result.id || "");
 
-      res.json({ success: true, sent });
+      await recordBroadcastPushLog({
+        title,
+        body,
+        image: imageUrl,
+        openPath: pathStr,
+        audience: "all",
+        recipientCount: result.recipients,
+        oneSignalId: result.id,
+      });
+
+      res.json({ success: true, sent: result.recipients, oneSignalId: result.id });
     } catch (error: any) {
       console.error("[Admin] Notify all error:", error);
+      try {
+        await recordBroadcastPushLog({
+          title: String(req.body?.title ?? "").trim(),
+          body: String(req.body?.body ?? "").trim(),
+          image: typeof req.body?.image === "string" ? req.body.image.trim() : "",
+          openPath: typeof req.body?.path === "string" ? req.body.path.trim() : "",
+          audience: "all",
+          recipientCount: 0,
+          error: error?.message || "notify-all failed",
+        });
+      } catch {
+        /* ignore */
+      }
       res.status(500).json({ success: false, message: error?.message || "Failed to send notifications" });
     }
   });
 
   app.post("/api/admin/notify-role", adminMiddleware, async (req, res) => {
     try {
-      const { title, body, role } = req.body;
+      const { title, body, role, image, path: openPath } = req.body;
       if (!title || !body) return res.status(400).json({ success: false, message: "Title and body required" });
+      const imageUrl = typeof image === "string" ? image.trim() : "";
+      const pathStr = typeof openPath === "string" ? openPath.trim() : "";
 
       const targetRole = role || 'all';
-      console.log('[OneSignal] Admin notify-role:', targetRole, title);
+      const dataPayload: Record<string, string> = { type: "admin_broadcast", role: targetRole };
+      if (pathStr) dataPayload.path = pathStr;
+      console.log('[OneSignal] Admin notify-role:', targetRole, title, imageUrl ? '(with image)' : '(default image)', pathStr ? `(open: ${pathStr})` : '');
 
       // For role-targeted sends: query user IDs from DB and pass to notifyUsersByRole
       // OneSignal.login(userId) links userId as external_id — use include_aliases to target them
@@ -6722,12 +7530,42 @@ Respond ONLY with a valid JSON array (no markdown, no code blocks):
         console.log(`[OneSignal] Role=${targetRole} found ${externalUserIds.length} users`);
       }
 
-      const sent = await notifyUsersByRole(targetRole, { title, body, data: { type: 'admin_broadcast', role: targetRole } }, externalUserIds);
-      console.log('[OneSignal] notify-role sent:', sent);
+      const result = await notifyUsersByRole(
+        targetRole,
+        { title, body, data: dataPayload, image: imageUrl || undefined },
+        externalUserIds,
+      );
+      console.log('[OneSignal] notify-role sent:', result.recipients, result.id || "");
 
-      res.json({ success: true, sent });
+      await recordBroadcastPushLog({
+        title,
+        body,
+        image: imageUrl,
+        openPath: pathStr,
+        audience: targetRole === "all" ? "all" : "role",
+        targetRole: targetRole === "all" ? "" : targetRole,
+        recipientCount: result.recipients,
+        oneSignalId: result.id,
+      });
+
+      res.json({ success: true, sent: result.recipients, oneSignalId: result.id });
     } catch (error: any) {
       console.error("[Admin] Notify role error:", error);
+      try {
+        const targetRole = req.body?.role || "all";
+        await recordBroadcastPushLog({
+          title: String(req.body?.title ?? "").trim(),
+          body: String(req.body?.body ?? "").trim(),
+          image: typeof req.body?.image === "string" ? req.body.image.trim() : "",
+          openPath: typeof req.body?.path === "string" ? req.body.path.trim() : "",
+          audience: targetRole === "all" ? "all" : "role",
+          targetRole: targetRole === "all" ? "" : String(targetRole),
+          recipientCount: 0,
+          error: error?.message || "notify-role failed",
+        });
+      } catch {
+        /* ignore */
+      }
       res.status(500).json({ success: false, message: error?.message || "Failed to send notifications" });
     }
   });
@@ -7200,7 +8038,7 @@ Respond ONLY with a valid JSON array (no markdown, no code blocks):
           title: `${emoji} ${teacherName} is LIVE now!`,
           body: finalTitle,
           data: { type: 'teacher_live', sessionId, link, platform },
-        }, teacherId);
+        });
       } catch (notifyErr: any) {
         console.error("[Live] Notify error (non-blocking):", notifyErr?.message || notifyErr);
       }
@@ -7279,7 +8117,7 @@ Respond ONLY with a valid JSON array (no markdown, no code blocks):
         title: `🎥 ${teacherName} is streaming LIVE now!`,
         body: title,
         data: { type: 'teacher_live', sessionId, link: rtmpUrl, platform: 'camera' },
-      }, teacherId);
+      });
       
       console.log(`[CameraStream] ${teacherName} started camera stream: ${title}`);
       return res.json({ success: true, session: sessionData, rtmpUrl });
@@ -7379,7 +8217,7 @@ Respond ONLY with a valid JSON array (no markdown, no code blocks):
           title: `🎥 ${teacherName} is LIVE now!`,
           body: title,
           data: { type: 'teacher_live', sessionId, link: embedUrl, platform: 'bunny' },
-        }, teacherId);
+        });
       } catch (notifyErr: any) {
         console.warn("[BunnyLive] Notification error:", notifyErr?.message);
       }
@@ -8728,11 +9566,23 @@ Be specific about component locations and names. If image quality is poor or not
 
   // Helper: resolve authenticated profile from x-session-token header
   async function getLeadProfile(req: any): Promise<{ id: string; phone: string; name: string; role: string } | null> {
-    let sessionToken: string | undefined =
-      req.headers["x-session-token"] || req.body?.sessionToken || req.query?.sessionToken;
+    let sessionToken: string | undefined = req.headers["x-session-token"];
     if (Array.isArray(sessionToken)) sessionToken = sessionToken[0];
     if (sessionToken != null && typeof sessionToken !== "string") sessionToken = String(sessionToken);
     sessionToken = sessionToken?.trim();
+    if (!sessionToken) {
+      const auth = req.headers["authorization"];
+      const a = Array.isArray(auth) ? auth[0] : auth;
+      if (typeof a === "string" && a.toLowerCase().startsWith("bearer ")) {
+        sessionToken = a.slice(7).trim();
+      }
+    }
+    if (!sessionToken) {
+      sessionToken = req.body?.sessionToken || req.query?.sessionToken;
+      if (Array.isArray(sessionToken)) sessionToken = sessionToken[0];
+      if (sessionToken != null && typeof sessionToken !== "string") sessionToken = String(sessionToken);
+      sessionToken = sessionToken?.trim();
+    }
     if (!sessionToken) return null;
     try {
       const sessionRows = await db.select().from(sessions).where(eq(sessions.sessionToken, sessionToken as string));
@@ -8973,30 +9823,66 @@ Be specific about component locations and names. If image quality is poor or not
       }
 
       const { category, sort } = req.query;
+      const sortVal = Array.isArray(sort) ? sort[0] : sort;
+      const categoryVal = Array.isArray(category) ? category[0] : category;
+      console.log("[Leads] List start", {
+        viewerRole: profile.role,
+        adminViewer,
+        sort: sortVal,
+        category: categoryVal,
+      });
       let allLeads = await db.select().from(leads).orderBy(
-        sort === 'oldest' ? leads.createdAt : desc(leads.createdAt)
+        sortVal === 'oldest' ? leads.createdAt : desc(leads.createdAt)
       );
-      if (category && category !== 'all') {
-        allLeads = allLeads.filter(l => l.category === category);
+      if (categoryVal && categoryVal !== 'all') {
+        allLeads = allLeads.filter(l => l.category === categoryVal);
       }
-      const result = allLeads.map(lead => {
+      console.log("[Leads] List fetched", { count: allLeads.length });
+      const result = allLeads.map((lead) => {
         const pb = parsePurchasedBy(lead.purchasedBy);
-        // Technicians: name + phone only after payment. Admins (adminViewer): full row.
-        const purchased = pb.includes(profile.id) || adminViewer;
+        // Strict: contact only after purchase (no bypass).
+        const purchased = pb.includes(profile.id);
+
+        // Strict DTO: NEVER leak contact/customerName unless purchased.
         return {
-          ...lead,
-          purchasedBy: pb,
+          id: lead.id,
+          title: lead.title,
+          description: lead.description,
+          category: lead.category,
+          location: lead.location,
+          createdAt: lead.createdAt,
+          updatedAt: lead.updatedAt,
+          status: lead.status,
+          price: lead.price,
+          maxBuyers: lead.maxBuyers,
           buyerCount: pb.length,
           purchased,
           isFull: pb.length >= lead.maxBuyers,
-          contactNumber: purchased ? lead.contactNumber : '',
-          customerName: purchased ? lead.customerName : '',
+          purchasedBy: pb,
+
+          // These can be used for distance; not PII.
+          latitude: lead.latitude || "",
+          longitude: lead.longitude || "",
+
+          // PII: only after purchase.
+          customerName: purchased ? (lead.customerName || "") : "",
+          contactNumber: purchased ? (lead.contactNumber || "") : "",
         };
       });
+
+      const leaked = result.filter((l: any) => !l.purchased && (!!l.contactNumber || !!l.customerName)).length;
+
       return res.json(result);
     } catch (error) {
-      console.error("[Leads] List error:", error);
-      return res.status(500).json({ success: false, message: "Failed to fetch leads" });
+      const err = error as any;
+      const errorId = `leads_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+      console.error("[Leads] List error:", errorId, err?.message || err, err?.stack || "");
+      return res.status(500).json({
+        success: false,
+        message: "Failed to fetch leads",
+        errorId,
+        detail: String(err?.message || ""),
+      });
     }
   });
 
@@ -9022,6 +9908,29 @@ Be specific about component locations and names. If image quality is poor or not
         createdAt: now,
         updatedAt: now,
       }).returning();
+
+      (async () => {
+        try {
+          const candidates = await db
+            .select({ id: profiles.id, phone: profiles.phone, role: profiles.role, email: profiles.email })
+            .from(profiles)
+            .where(isNull(profiles.deleted_at));
+          const adminIds = candidates.filter((p) => isServerAdminProfile(p)).map((p) => p.id);
+          if (adminIds.length === 0) return;
+          const preview = `${title} — ${customerName || "Customer"}`.slice(0, 120);
+          const out = await sendNotification(
+            "New lead",
+            preview,
+            { type: "new_lead", leadId: lead.id, path: "/(tabs)/leads" },
+            adminIds,
+            {},
+          );
+          console.log("[Leads] Admin push sent admins=", adminIds.length, "recipients=", out.recipients, "id=", out.id || "-");
+        } catch (e) {
+          console.error("[Leads] Admin notify error:", e);
+        }
+      })();
+
       return res.json({ success: true, lead });
     } catch (error) {
       console.error("[Leads] Create error:", error);
@@ -9134,12 +10043,40 @@ Be specific about component locations and names. If image quality is poor or not
 
       const pb = parsePurchasedBy(lead.purchasedBy);
       if (pb.includes(profile.id)) {
-        return res.json({ success: true, contactNumber: lead.contactNumber, alreadyClaimed: true, lead: { ...lead, purchasedBy: pb, purchased: true } });
+        // Do not return contactNumber here; clients should rely on /api/leads list (purchased=true) or /api/leads/:id/contact.
+        return res.json({ success: true, alreadyClaimed: true, lead: { id: lead.id, purchasedBy: pb, purchased: true, buyerCount: pb.length } });
       }
       return res.status(402).json({ success: false, message: "Payment required to claim this lead", requiresPayment: true });
     } catch (error) {
       console.error("[Leads] Claim error:", error);
       return res.status(500).json({ success: false, message: "Failed to claim lead" });
+    }
+  });
+
+  // GET /api/leads/:id/contact — strict contact access (must be purchased or admin)
+  app.get("/api/leads/:id/contact", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const profile = await getLeadProfile(req);
+      if (!profile) return res.status(401).json({ success: false, message: "Authentication required" });
+      const adminViewer = isServerAdminProfile(profile);
+      if (profile.role !== "technician" && !adminViewer) {
+        return res.status(403).json({ success: false, message: "Only technicians can view lead contact" });
+      }
+
+      const [lead] = await db.select().from(leads).where(eq(leads.id, id));
+      if (!lead) return res.status(404).json({ success: false, message: "Lead not found" });
+
+      const pb = parsePurchasedBy(lead.purchasedBy);
+      const purchased = pb.includes(profile.id);
+      if (!purchased) {
+        return res.status(403).json({ success: false, message: "Payment required" });
+      }
+
+      return res.json({ success: true, contactNumber: lead.contactNumber || "", customerName: lead.customerName || "" });
+    } catch (error) {
+      console.error("[Leads] Contact error:", error);
+      return res.status(500).json({ success: false, message: "Failed to fetch contact" });
     }
   });
 

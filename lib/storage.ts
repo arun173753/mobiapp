@@ -9,24 +9,68 @@ const KEYS = {
   ONBOARDED: 'repairhub_onboarded_v2',
   CONVERSATIONS: 'repairhub_conversations_v2',
   SESSION_TOKEN: 'mobi_session_token_v2',
+  /** Legacy / optional alias for backend session token */
+  USER_TOKEN: 'userToken',
 };
 
+function mirrorProfileToWebLocal(profileJson: string) {
+  if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
+    try {
+      window.localStorage.setItem(KEYS.PROFILE, profileJson);
+    } catch {
+      /* quota / private mode */
+    }
+  }
+}
+
 export async function getProfile(): Promise<UserProfile | null> {
+  if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const w = window.localStorage.getItem(KEYS.PROFILE);
+      if (w) return JSON.parse(w) as UserProfile;
+    } catch {
+      /* ignore */
+    }
+  }
   const data = await AsyncStorage.getItem(KEYS.PROFILE);
-  return data ? JSON.parse(data) : null;
+  if (data) {
+    mirrorProfileToWebLocal(data);
+    return JSON.parse(data) as UserProfile;
+  }
+  return null;
 }
 
 export async function saveProfile(profile: UserProfile): Promise<void> {
-  await AsyncStorage.setItem(KEYS.PROFILE, JSON.stringify(profile));
+  const json = JSON.stringify(profile);
+  await AsyncStorage.setItem(KEYS.PROFILE, json);
+  mirrorProfileToWebLocal(json);
 }
 
 export async function isOnboarded(): Promise<boolean> {
+  if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
+    const w = window.localStorage.getItem(KEYS.ONBOARDED);
+    if (w === 'true') return true;
+  }
   const val = await AsyncStorage.getItem(KEYS.ONBOARDED);
+  if (val === 'true' && Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
+    try {
+      window.localStorage.setItem(KEYS.ONBOARDED, 'true');
+    } catch {
+      /* ignore */
+    }
+  }
   return val === 'true';
 }
 
 export async function setOnboarded(): Promise<void> {
   await AsyncStorage.setItem(KEYS.ONBOARDED, 'true');
+  if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
+    try {
+      window.localStorage.setItem(KEYS.ONBOARDED, 'true');
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 export async function getPosts(): Promise<Post[]> {
@@ -262,8 +306,14 @@ export async function saveSessionToken(token: string): Promise<void> {
   // On web, use localStorage for better persistence
   if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
     window.localStorage.setItem(KEYS.SESSION_TOKEN, t);
+    try {
+      window.localStorage.setItem(KEYS.USER_TOKEN, t);
+    } catch {
+      /* ignore */
+    }
   }
   await AsyncStorage.setItem(KEYS.SESSION_TOKEN, t);
+  await AsyncStorage.setItem(KEYS.USER_TOKEN, t).catch(() => {});
 }
 
 export async function getSessionToken(): Promise<string | null> {
@@ -272,17 +322,37 @@ export async function getSessionToken(): Promise<string | null> {
     if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
       const token = window.localStorage.getItem(KEYS.SESSION_TOKEN);
       if (token) return token;
+      const userTokWeb = window.localStorage.getItem(KEYS.USER_TOKEN);
+      if (userTokWeb) return userTokWeb;
     }
     let token = await AsyncStorage.getItem(KEYS.SESSION_TOKEN);
-    if (token) return token;
+    if (token) {
+      if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem(KEYS.SESSION_TOKEN, token);
+      }
+      return token;
+    }
     const legacyToken = await AsyncStorage.getItem('mobi_session_token');
     if (legacyToken) {
       await AsyncStorage.setItem(KEYS.SESSION_TOKEN, legacyToken);
       if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
         window.localStorage.setItem(KEYS.SESSION_TOKEN, legacyToken);
       }
+      return legacyToken;
     }
-    return legacyToken;
+    const userTok = await AsyncStorage.getItem(KEYS.USER_TOKEN);
+    if (userTok) {
+      await AsyncStorage.setItem(KEYS.SESSION_TOKEN, userTok);
+      if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem(KEYS.SESSION_TOKEN, userTok);
+      }
+      return userTok;
+    }
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
+      const wt = window.localStorage.getItem(KEYS.USER_TOKEN);
+      if (wt) return wt;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -292,12 +362,25 @@ export async function clearSessionToken(): Promise<void> {
   if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
     window.localStorage.removeItem(KEYS.SESSION_TOKEN);
     window.localStorage.removeItem('mobi_session_token');
+    window.localStorage.removeItem(KEYS.USER_TOKEN);
   }
   await AsyncStorage.removeItem(KEYS.SESSION_TOKEN);
   await AsyncStorage.removeItem('mobi_session_token');
+  await AsyncStorage.removeItem(KEYS.USER_TOKEN);
 }
 
 export async function clearAll(): Promise<void> {
+  if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
+    try {
+      window.localStorage.removeItem(KEYS.PROFILE);
+      window.localStorage.removeItem(KEYS.ONBOARDED);
+      window.localStorage.removeItem(KEYS.SESSION_TOKEN);
+      window.localStorage.removeItem('mobi_session_token');
+      window.localStorage.removeItem(KEYS.USER_TOKEN);
+    } catch {
+      /* ignore */
+    }
+  }
   await AsyncStorage.multiRemove([
     KEYS.PROFILE,
     KEYS.POSTS,
@@ -305,6 +388,8 @@ export async function clearAll(): Promise<void> {
     KEYS.ONBOARDED,
     KEYS.CONVERSATIONS,
     KEYS.SESSION_TOKEN,
+    'mobi_session_token',
+    KEYS.USER_TOKEN,
   ]);
 }
 

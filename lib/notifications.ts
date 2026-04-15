@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import { getApiUrl } from './query-client';
+import { getOneSignalSubscriptionId, initOneSignal, loginOneSignal, logoutOneSignal as osLogout, requestOneSignalPermission } from './onesignal';
 
 let Notifications: any = null;
 const getNotifications = () => {
@@ -141,6 +142,9 @@ export async function requestNotificationPermission() {
 
 import Constants from 'expo-constants';
 
+let pushSubscriptionListenerAttached = false;
+let pushSubscriptionUserId: string | null = null;
+
 async function registerWithBackend(userId: string, sessionToken: string | null, pushToken: string): Promise<void> {
   try {
     const baseUrl = getApiUrl();
@@ -158,10 +162,70 @@ async function registerWithBackend(userId: string, sessionToken: string | null, 
   }
 }
 
+function ensurePushSubscriptionSyncListener(userId: string) {
+  if (Platform.OS === 'web') return;
+  pushSubscriptionUserId = userId;
+  if (pushSubscriptionListenerAttached) return;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { OneSignal } = require('react-native-onesignal');
+    if (!OneSignal?.User?.pushSubscription?.addEventListener) return;
+    const handler = async (state: any) => {
+      const uid = pushSubscriptionUserId;
+      const sid = state?.current?.id ? String(state.current.id) : '';
+      if (!uid || !sid) return;
+      let sessionToken: string | null = null;
+      try {
+        const Storage = await import('./storage');
+        sessionToken = await Storage.getSessionToken();
+      } catch {
+        /* ignore */
+      }
+      await registerWithBackend(uid, sessionToken, sid);
+      console.log('[OneSignal] subscription change synced to backend');
+    };
+    OneSignal.User.pushSubscription.addEventListener('change', handler);
+    pushSubscriptionListenerAttached = true;
+    console.log('[OneSignal] pushSubscription listener attached');
+  } catch (e) {
+    console.warn('[OneSignal] attach subscription listener:', e);
+  }
+}
+
+export function clearPushRegistrationContext() {
+  pushSubscriptionUserId = null;
+}
+
 export async function registerPushToken(userId: string, sessionToken?: string | null): Promise<void> {
   if (Platform.OS === 'web') return;
 
   try {
+    // OneSignal: initialize early, request permission, login external user id.
+    await initOneSignal();
+    await requestOneSignalPermission();
+    await loginOneSignal(userId);
+    ensurePushSubscriptionSyncListener(userId);
+
+    let oneSignalId: string | null = null;
+    for (let attempt = 0; attempt < 12; attempt++) {
+      oneSignalId = await getOneSignalSubscriptionId();
+      if (oneSignalId) break;
+      await new Promise((r) => setTimeout(r, 400));
+    }
+
+    if (oneSignalId) {
+      let token: string | null = sessionToken ?? null;
+      if (!token) {
+        try {
+          const Storage = await import('./storage');
+          token = await Storage.getSessionToken();
+        } catch {}
+      }
+      await registerWithBackend(userId, token, oneSignalId);
+      console.log('[OneSignal] Registration complete for user:', userId.slice(0, 8) + '...', 'playerId ok');
+      return;
+    }
+
     const Notifs = getNotifications();
     if (!Notifs) return;
 
@@ -197,7 +261,8 @@ export async function registerPushToken(userId: string, sessionToken?: string | 
 }
 
 export function logoutOneSignal(): void {
-  // No-op for Expo Notifications
+  clearPushRegistrationContext();
+  osLogout().catch(() => {});
 }
 
 export function cleanupSounds() {

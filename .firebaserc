@@ -1,5 +1,7 @@
 {
   "projects": {
     "default": "arunmobi-app"
-  }
+  },
+  "targets": {},
+  "etags": {}
 }

@@ -1,42 +1,24 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import {
   View, Text, StyleSheet, FlatList, Pressable, Platform,
-  ActivityIndicator, Dimensions, Alert, ViewToken, Modal, BackHandler,
-  TextInput, ScrollView, Keyboard, Share,
+  ActivityIndicator, Dimensions, ViewToken, Modal, BackHandler,
+  TextInput, ScrollView, Keyboard,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useVideoPlayer, VideoView, type VideoPlayer } from 'expo-video';
-import { isBunnyUrl, getBunnyEmbedUrl, resolveBunnyPlaybackUrl, getBunnyVideoId } from '@/lib/bunny-cdn';
 import * as VideoThumbnails from 'expo-video-thumbnails';
-import Animated, {
-  useSharedValue, useAnimatedStyle, withTiming, withSequence,
-  withDelay, runOnJS, withSpring,
-} from 'react-native-reanimated';
-import * as Haptics from 'expo-haptics';
 import { router, useNavigation, useLocalSearchParams } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import Colors from '@/constants/colors';
 import { useApp } from '@/lib/context';
 import { apiRequest, getApiUrl } from '@/lib/query-client';
-import { Reel, Comment, UserRole } from '@/lib/types';
+import ReelItem from '@/components/ReelItem';
+import { Reel, Comment } from '@/lib/types';
 
 const C = Colors.light;
 const { width: SW, height: SH } = Dimensions.get('window');
-const SNAP_HEIGHT = Platform.OS === 'web' ? '100vh' : SH;
-
-/** Inline — used before StyleSheet `s` (ReelVideoWithHook mounts above `s` in source). */
-const REEL_VIDEO_LAYER_STYLE = StyleSheet.create({
-  video: {
-    width: '100%',
-    height: '100%',
-    position: 'absolute',
-    top: 0,
-    left: 0,
-  },
-}).video;
-
-const sessionViewedReels = new Set<string>();
+const SNAP_HEIGHT = SH;
 
 function timeAgo(ts: number): string {
   const diff = Date.now() - ts;
@@ -176,288 +158,6 @@ function CommentsModal({
   );
 }
 
-/** Single mounted instance per visible reel — avoids N native decoders in FlatList (OOM crashes). */
-function ReelVideoWithHook({
-  videoSource,
-  isActive,
-  muted,
-  onPlayer,
-}: {
-  videoSource: string;
-  isActive: boolean;
-  muted: boolean;
-  onPlayer: (p: VideoPlayer | null) => void;
-}) {
-  const player = useVideoPlayer(videoSource, (p) => {
-    p.loop = true;
-    p.volume = 1;
-  });
-
-  useEffect(() => {
-    onPlayer(player);
-    return () => {
-      onPlayer(null);
-    };
-  }, [player, onPlayer]);
-
-  useEffect(() => {
-    if (isActive) {
-      player.play();
-    } else {
-      player.pause();
-      player.currentTime = 0;
-    }
-  }, [isActive, player]);
-
-  useEffect(() => {
-    player.muted = muted;
-  }, [muted, player]);
-
-  return <VideoView player={player} style={REEL_VIDEO_LAYER_STYLE} contentFit="cover" nativeControls={false} />;
-}
-
-function ReelItem({ reel, isActive, currentUserId, onLike, onDelete, onOpenComments, onView }: {
-  reel: Reel;
-  isActive: boolean;
-  currentUserId?: string;
-  onLike: (id: string) => void;
-  onOpenComments: (reel: Reel) => void;
-  onView?: (id: string) => void;
-}) {
-  const insets = useSafeAreaInsets();
-  const isLiked = currentUserId ? reel.likes.includes(currentUserId) : false;
-  const baseUrl = getApiUrl();
-  const rawVideoUrl = (reel.videoUrl.startsWith('http') || reel.videoUrl.includes('b-cdn.net'))
-    ? reel.videoUrl
-    : `${baseUrl}${reel.videoUrl}`;
-  const videoSource = isBunnyUrl(rawVideoUrl)
-    ? resolveBunnyPlaybackUrl(rawVideoUrl)
-    : rawVideoUrl;
-  const bunnyEmbedUrl = isBunnyUrl(rawVideoUrl) ? getBunnyEmbedUrl(rawVideoUrl, isActive) : null;
-  const [muted, setMuted] = useState(false);
-  const lastTap = useRef(0);
-
-  useEffect(() => {
-    if (isActive && !sessionViewedReels.has(reel.id)) {
-      sessionViewedReels.add(reel.id);
-      onView?.(reel.id);
-    }
-  }, [isActive, reel.id, onView]);
-
-  const heartScale = useSharedValue(0);
-  const heartOpacity = useSharedValue(0);
-  const muteIconOpacity = useSharedValue(0);
-  const pauseIconOpacity = useSharedValue(0);
-
-  const useIframe = Platform.OS === 'web' && !!bunnyEmbedUrl;
-
-  const playerRef = useRef<VideoPlayer | null>(null);
-  const onPlayer = useCallback((p: VideoPlayer | null) => {
-    playerRef.current = p;
-  }, []);
-  const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => () => {
-    if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
-  }, []);
-
-  const [isPlaying, setIsPlaying] = useState(true);
-
-  useEffect(() => {
-    if (Platform.OS === 'web' && !isActive) setIsPlaying(false);
-    if (Platform.OS === 'web' && isActive) setIsPlaying(true);
-  }, [isActive]);
-
-  const thumbUri =
-    reel.thumbnailUrl &&
-    (reel.thumbnailUrl.startsWith('http') || reel.thumbnailUrl.includes('b-cdn.net'))
-      ? reel.thumbnailUrl
-      : reel.thumbnailUrl
-        ? `${baseUrl}${reel.thumbnailUrl}`
-        : null;
-
-  const showVideoLayer = !useIframe && (isActive || Platform.OS === 'web');
-
-  const triggerDoubleTapLike = () => {
-    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    if (!isLiked) onLike(reel.id);
-    heartOpacity.value = 1;
-    heartScale.value = withSequence(
-      withSpring(1.2, { damping: 6, stiffness: 200 }),
-      withDelay(600, withTiming(0, { duration: 300 }))
-    );
-    heartOpacity.value = withDelay(600, withTiming(0, { duration: 300 }));
-  };
-
-  const showMuteIcon = () => {
-    muteIconOpacity.value = withSequence(
-      withTiming(1, { duration: 100 }),
-      withDelay(700, withTiming(0, { duration: 300 }))
-    );
-  };
-
-  const showPauseIcon = () => {
-    pauseIconOpacity.value = withSequence(
-      withTiming(1, { duration: 100 }),
-      withDelay(500, withTiming(0, { duration: 300 }))
-    );
-  };
-
-  const handleTap = () => {
-    const now = Date.now();
-    const DOUBLE_TAP_DELAY = 300;
-
-    if (now - lastTap.current < DOUBLE_TAP_DELAY) {
-      lastTap.current = 0;
-      triggerDoubleTapLike();
-    } else {
-      lastTap.current = now;
-      if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
-      tapTimerRef.current = setTimeout(() => {
-        if (lastTap.current !== 0) {
-          lastTap.current = 0;
-          runOnJS(() => {
-            if (useIframe) return;
-            const p = playerRef.current;
-            if (!p) return;
-            setIsPlaying((prev) => {
-              if (prev) p.pause();
-              else p.play();
-              return !prev;
-            });
-            showPauseIcon();
-          })();
-        }
-      }, DOUBLE_TAP_DELAY);
-    }
-  };
-
-  const handleLongPress = () => {
-    setMuted(m => !m);
-    showMuteIcon();
-    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  };
-
-  const heartStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: heartScale.value }],
-    opacity: heartOpacity.value,
-  }));
-  const muteStyle = useAnimatedStyle(() => ({ opacity: muteIconOpacity.value }));
-  const pauseStyle = useAnimatedStyle(() => ({ opacity: pauseIconOpacity.value }));
-
-  const handleSideLike = () => {
-    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    onLike(reel.id);
-  };
-
-  const handleShare = async () => {
-    try {
-      if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      const title = reel.title || 'Check out this reel!';
-      const message = reel.description
-        ? `${title}\n\n${reel.description}`
-        : title;
-      await Share.share({ message, title });
-    } catch (e) {
-      console.error('[Reels] Share error:', e);
-    }
-  };
-
-  return (
-    <View style={[s.reelWrap, { height: SNAP_HEIGHT }]}>
-      {Platform.OS === 'web' && bunnyEmbedUrl ? (
-        <iframe
-          src={bunnyEmbedUrl}
-          style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', border: 'none' } as any}
-          allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
-          allowFullScreen
-        />
-      ) : showVideoLayer ? (
-        <ReelVideoWithHook
-          videoSource={videoSource}
-          isActive={Platform.OS === 'web' ? isActive : true}
-          muted={muted}
-          onPlayer={onPlayer}
-        />
-      ) : (
-        <View style={s.video}>
-          {thumbUri ? (
-            <Image source={{ uri: thumbUri }} style={StyleSheet.absoluteFillObject} contentFit="cover" />
-          ) : (
-            <View style={{ flex: 1, backgroundColor: '#0a0a0a' }} />
-          )}
-        </View>
-      )}
-
-      <Pressable
-        style={s.tapZone}
-        onPress={handleTap}
-        onLongPress={handleLongPress}
-        delayLongPress={400}
-      />
-
-      <Animated.View style={[s.centerIcon, heartStyle]} pointerEvents="none">
-        <Ionicons name="heart" size={90} color="#fff" />
-      </Animated.View>
-
-      <Animated.View style={[s.centerIcon, muteStyle]} pointerEvents="none">
-        <View style={s.muteCircle}>
-          <Ionicons name={muted ? "volume-mute" : "volume-high"} size={28} color="#fff" />
-        </View>
-      </Animated.View>
-
-      <Animated.View style={[s.centerIcon, pauseStyle]} pointerEvents="none">
-        <View style={s.muteCircle}>
-          <Ionicons name="pause" size={28} color="#fff" />
-        </View>
-      </Animated.View>
-      <View style={[s.actionStack, { bottom: insets.bottom + 92 }]}>
-        <Pressable style={s.sideItem} onPress={handleSideLike}>
-          <Ionicons name={isLiked ? "heart" : "heart-outline"} size={30} color={isLiked ? "#FF3040" : "#fff"} />
-          <Text style={s.sideCount}>{reel.likes.length}</Text>
-        </Pressable>
-        <Pressable style={s.sideItem} onPress={() => onOpenComments(reel)}>
-          <Ionicons name="chatbubble-outline" size={28} color="#fff" />
-          <Text style={s.sideCount}>{reel.comments.length}</Text>
-        </Pressable>
-        <Pressable style={s.sideItem} onPress={handleShare}>
-          <Ionicons name="share-social-outline" size={28} color="#fff" />
-          <Text style={s.sideCount}>Share</Text>
-        </Pressable>
-      </View>
-      <View style={[s.viewsBadge, { top: insets.top + 18 }]}>
-        <Pressable onPress={() => router.replace('/')} hitSlop={12} style={s.backIconBtn}>
-          <Ionicons name="arrow-back" size={16} color="#fff" />
-        </Pressable>
-        <Ionicons name="eye-outline" size={15} color="#fff" />
-        <Text style={s.viewsText}>{reel.views || 0}</Text>
-      </View>
-      <View style={[s.bottom, { paddingBottom: insets.bottom + 16 }]}>
-        <View style={s.bottomLeft}>
-          <Pressable
-            style={s.authorRow}
-            onPress={() => router.push({ pathname: '/user-profile', params: { id: reel.userId } })}
-          >
-            {reel.userAvatar ? (
-              <Image
-                source={{ uri: (reel.userAvatar.startsWith('http') || reel.userAvatar.includes('b-cdn.net')) ? reel.userAvatar : `${baseUrl}${reel.userAvatar}` }}
-                style={s.authorAv}
-              />
-            ) : (
-              <View style={[s.authorAv, s.authorAvPlaceholder]}>
-                <Text style={s.authorAvText}>{reel.userName.charAt(0).toUpperCase()}</Text>
-              </View>
-            )}
-            <Text style={s.authorName}>{reel.userName}</Text>
-          </Pressable>
-          {reel.title ? <Text style={s.desc} numberOfLines={2}>{reel.title}</Text> : null}
-          {reel.description ? <Text style={s.desc} numberOfLines={3}>{reel.description}</Text> : null}
-        </View>
-      </View>
-    </View>
-  );
-}
-
 export default function ReelsScreen() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
@@ -474,7 +174,9 @@ export default function ReelsScreen() {
     try {
       const res = await apiRequest('GET', '/api/reels');
       const data = await res.json();
-      if (Array.isArray(data)) setReelsList(data);
+      if (Array.isArray(data)) {
+        setReelsList(data);
+      }
     } catch (e) {
       console.error('[Reels] Fetch error:', e);
     } finally {
@@ -483,6 +185,14 @@ export default function ReelsScreen() {
   }, []);
 
   useEffect(() => { fetchReels(); }, [fetchReels]);
+
+  // Refresh when returning to this screen (e.g. after uploading a reel)
+  useFocusEffect(
+    useCallback(() => {
+      void fetchReels();
+      return undefined;
+    }, [fetchReels]),
+  );
 
   // Resolve the initial index once data is loaded — also drives activeIndex so overlay is correct
   const initialTargetIdx = useMemo(() => {
@@ -499,28 +209,34 @@ export default function ReelsScreen() {
 
   const handleLike = useCallback(async (reelId: string) => {
     if (!profile) return;
+    let prevLikes: string[] | null = null;
+    // Optimistic UI
+    setReelsList(prev => prev.map(r => {
+      if (r.id !== reelId) return r;
+      const likes = Array.isArray((r as any).likes) ? ((r as any).likes as string[]) : [];
+      prevLikes = likes;
+      const next = likes.includes(profile.id) ? likes.filter(x => x !== profile.id) : [...likes, profile.id];
+      return { ...r, likes: next };
+    }));
     try {
       const res = await apiRequest('POST', `/api/reels/${reelId}/like`, { userId: profile.id });
       const data = await res.json();
-      if (data.success) {
+      if (data.success && Array.isArray(data.likes)) {
         setReelsList(prev => prev.map(r => r.id === reelId ? { ...r, likes: data.likes } : r));
       }
     } catch (e) {
+      // Roll back on failure
+      if (prevLikes) {
+        setReelsList(prev => prev.map(r => r.id === reelId ? { ...r, likes: prevLikes! } : r));
+      }
       console.error('[Reels] Like error:', e);
     }
   }, [profile]);
 
-  const handleDelete = useCallback(async (reelId: string) => {
-    if (!profile) return;
-    try {
-      await apiRequest('DELETE', `/api/reels/${reelId}`, { userId: profile.id });
-      setReelsList(prev => prev.filter(r => r.id !== reelId));
-    } catch (e) {
-      console.error('[Reels] Delete error:', e);
-    }
-  }, [profile]);
-
+  const viewedRef = useRef<Set<string>>(new Set());
   const handleView = useCallback(async (reelId: string) => {
+    if (!reelId || viewedRef.current.has(reelId)) return;
+    viewedRef.current.add(reelId);
     try {
       await apiRequest('POST', `/api/reels/${reelId}/view`);
       setReelsList(prev => prev.map(r => r.id === reelId ? { ...r, views: (r.views || 0) + 1 } : r));
@@ -562,7 +278,7 @@ export default function ReelsScreen() {
   }
 
   return (
-    <View style={s.container}>
+    <View style={[s.container, Platform.OS === 'web' ? s.webViewport : null]}>
       <FlatList
         ref={flatListRef}
         data={reelsList}
@@ -574,9 +290,9 @@ export default function ReelsScreen() {
             isActive={index === activeIndex}
             currentUserId={profile?.id}
             onLike={handleLike}
-            onDelete={profile?.id === item.userId ? handleDelete : undefined}
             onOpenComments={(r) => setCommentReelId(r.id)}
             onView={handleView}
+            onRetry={() => void fetchReels()}
           />
         )}
         pagingEnabled
@@ -587,8 +303,8 @@ export default function ReelsScreen() {
         disableIntervalMomentum
         bounces={false}
         overScrollMode="never"
-        style={Platform.OS === 'web' ? ({ height: '100vh' } as any) : undefined}
-        contentContainerStyle={Platform.OS === 'web' ? ({ minHeight: '100vh', backgroundColor: '#000' } as any) : { backgroundColor: '#000' }}
+        style={Platform.OS === 'web' ? ({ height: '100vh', width: '100vw' } as any) : undefined}
+        contentContainerStyle={Platform.OS === 'web' ? ({ minHeight: '100vh', width: '100vw', backgroundColor: '#000' } as any) : { backgroundColor: '#000' }}
         onViewableItemsChanged={onViewableItemsChanged}
         viewabilityConfig={viewabilityConfig}
         getItemLayout={(_, index) => ({ length: SH, offset: SH * index, index })}
@@ -625,6 +341,12 @@ export default function ReelsScreen() {
 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
+  webViewport: {
+    position: 'relative',
+    overflow: 'hidden',
+    width: '100vw' as any,
+    height: '100vh' as any,
+  },
   center: { justifyContent: 'center', alignItems: 'center' },
   reelWrap: {
     width: '100%',
@@ -745,6 +467,47 @@ const s = StyleSheet.create({
     borderRadius: 22, marginTop: 20, gap: 6,
   },
   emptyBtnText: { color: '#fff', fontFamily: 'Inter_600SemiBold', fontSize: 14 },
+});
+
+const styles = StyleSheet.create({
+  videoOverlayCenter: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: [{ translateX: -70 }, { translateY: -20 }],
+    width: 140,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  videoOverlayText: {
+    color: '#fff',
+    marginTop: 6,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  videoErrorBox: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    bottom: 110,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0,0,0,0.72)',
+  },
+  videoErrorTitle: { color: '#fff', fontWeight: '800', fontSize: 14, marginBottom: 4 },
+  videoErrorMsg: { color: 'rgba(255,255,255,0.8)', fontSize: 12, marginBottom: 10 },
+  videoRetryBtn: {
+    alignSelf: 'flex-start',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: '#fff',
+  },
+  videoRetryText: { color: '#111', fontWeight: '800' },
 });
 
 const cs = StyleSheet.create({
@@ -999,28 +762,32 @@ export function ReelsFeedInline({ initialReelId: initialReelIdProp }: { initialR
 
   const handleLike = useCallback(async (reelId: string) => {
     if (!profile) return;
+    let prevLikes: string[] | null = null;
+    setReelsList(prev => prev.map(r => {
+      if (r.id !== reelId) return r;
+      const likes = Array.isArray((r as any).likes) ? ((r as any).likes as string[]) : [];
+      prevLikes = likes;
+      const next = likes.includes(profile.id) ? likes.filter(x => x !== profile.id) : [...likes, profile.id];
+      return { ...r, likes: next };
+    }));
     try {
       const res = await apiRequest('POST', `/api/reels/${reelId}/like`, { userId: profile.id });
       const data = await res.json();
-      if (data.success) {
+      if (data.success && Array.isArray(data.likes)) {
         setReelsList(prev => prev.map(r => r.id === reelId ? { ...r, likes: data.likes } : r));
       }
     } catch (e) {
+      if (prevLikes) {
+        setReelsList(prev => prev.map(r => r.id === reelId ? { ...r, likes: prevLikes! } : r));
+      }
       console.error('[Reels] Like error:', e);
     }
   }, [profile]);
 
-  const handleDelete = useCallback(async (reelId: string) => {
-    if (!profile) return;
-    try {
-      await apiRequest('DELETE', `/api/reels/${reelId}`, { userId: profile.id });
-      setReelsList(prev => prev.filter(r => r.id !== reelId));
-    } catch (e) {
-      console.error('[Reels] Delete error:', e);
-    }
-  }, [profile]);
-
+  const viewedRef = useRef<Set<string>>(new Set());
   const handleView = useCallback(async (reelId: string) => {
+    if (!reelId || viewedRef.current.has(reelId)) return;
+    viewedRef.current.add(reelId);
     try {
       await apiRequest('POST', `/api/reels/${reelId}/view`);
       setReelsList(prev => prev.map(r => r.id === reelId ? { ...r, views: (r.views || 0) + 1 } : r));
@@ -1081,9 +848,9 @@ export function ReelsFeedInline({ initialReelId: initialReelIdProp }: { initialR
             isActive={index === activeIndex}
             currentUserId={profile?.id}
             onLike={handleLike}
-            onDelete={profile?.id === item.userId ? handleDelete : undefined}
             onOpenComments={(r) => setCommentReelId(r.id)}
             onView={handleView}
+            onRetry={() => void fetchReels()}
           />
         )}
         pagingEnabled

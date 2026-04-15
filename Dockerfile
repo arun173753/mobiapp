@@ -13,7 +13,7 @@ COPY shared/ ./shared/
 COPY server/templates/ ./server/templates/
 COPY app.json ./
 
-# static-build / assets are optional at runtime (server checks existsSync); dirs missing from git context
+# static-build / assets are optional at runtime (server checks existsSync)
 RUN mkdir -p uploads static-build assets
 
 ENV NODE_ENV=production
@@ -23,3 +23,4 @@ ENV SERVER_SOCKET_TIMEOUT_MS=600000
 EXPOSE 8080
 
 CMD ["node", "server_dist/index.js"]
+

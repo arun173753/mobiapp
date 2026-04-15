@@ -60,14 +60,6 @@ export default function OnboardingScreen() {
   const { completeOnboarding, loginWithProfile, isOnboarded, profile } = useApp();
 
   useEffect(() => {
-    // On web, clear any stale session tokens on mount to ensure clean login state
-    if (Platform.OS === 'web' && typeof window !== 'undefined' && window.localStorage) {
-      const sessionKey = 'mobi_session_token_v2';
-      window.localStorage.removeItem(sessionKey);
-    }
-  }, []);
-
-  useEffect(() => {
     if (isOnboarded && profile?.id) {
       router.replace(getRoleRoute(profile) as any);
     }
@@ -330,11 +322,12 @@ export default function OnboardingScreen() {
           try {
             console.log('[OTP-Phone] PRIMARY: Verifying with Firebase');
             const { verifyFirebaseOTP } = await import('@/lib/firebase-phone-auth');
-            const fbResult = await verifyFirebaseOTP(code);
+            const fbResult = await verifyFirebaseOTP(phone, code);
             
             if (fbResult.success) {
-              console.log('[OTP-Phone] ✓ Firebase verification successful');
-              verifyResult = { success: true, isNewUser: true };
+              // Must keep server fields (sessionToken, profile, isNewUser) — do not replace with a stub
+              console.log('[OTP-Phone] ✓ Primary verification successful');
+              verifyResult = fbResult as any;
             } else {
               console.warn('[OTP-Phone] Firebase verification failed, trying fallback');
             }

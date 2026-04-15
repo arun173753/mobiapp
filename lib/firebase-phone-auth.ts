@@ -36,19 +36,43 @@ export async function sendFirebaseOTP(phone: string): Promise<{ success: boolean
   }
 }
 
-export async function verifyFirebaseOTP(code: string): Promise<{ success: boolean; error?: string; verified?: boolean }> {
+export type PhoneVerifyResult = {
+  success: boolean;
+  error?: string;
+  verified?: boolean;
+  /** Present when success — required for session persistence */
+  sessionToken?: string;
+  profile?: unknown;
+  isNewUser?: boolean;
+};
+
+/**
+ * Phone OTP verification goes through the same backend as `verifyFallbackOTP`.
+ * Returns the full API payload so callers can persist `sessionToken` + `profile`.
+ */
+export async function verifyFirebaseOTP(phone: string, code: string): Promise<PhoneVerifyResult> {
   try {
-    // Verify OTP using backend - NO AUTO-LOGIN, just verification
-    console.log('[Firebase OTP] Verifying code:', code);
-    
-    const result = await verifyFallbackOTP('', code); // Phone not needed for verification
-    
-    if (result.success) {
-      console.log('[Firebase OTP] OTP verified successfully');
-      return { success: true, verified: true };
+    console.log('[Firebase OTP] Verifying code (backend session):', code);
+    const result = await verifyFallbackOTP(phone, code);
+
+    if (!result.success) {
+      return { success: false, error: result.error || 'Invalid OTP', verified: false };
     }
 
-    return { success: false, error: result.error || 'Invalid OTP', verified: false };
+    const data = result.data as Record<string, unknown> | undefined;
+    if (!data || typeof data !== 'object') {
+      console.error('[Firebase OTP] Missing response body from /api/otp/verify');
+      return { success: false, error: 'Invalid server response', verified: false };
+    }
+
+    console.log('[Firebase OTP] OTP verified; has sessionToken:', !!(data as any).sessionToken);
+    return {
+      success: true,
+      verified: true,
+      sessionToken: String((data as any).sessionToken || ''),
+      profile: (data as any).profile,
+      isNewUser: (data as any).isNewUser as boolean | undefined,
+    };
   } catch (e: any) {
     console.error('[Firebase OTP] Verify error:', e);
     return { success: false, error: e?.message || 'Network error', verified: false };
@@ -74,8 +98,13 @@ export async function sendFallbackOTP(phone: string): Promise<{ success: boolean
 export async function verifyFallbackOTP(phone: string, code: string): Promise<any> {
   try {
     const deviceId = await (await import('./device-fingerprint')).getDeviceId();
-    const res = await apiRequest('POST', '/api/otp/verify', { phone, otp: code, deviceId });
-    const data = await res.json();
+    const baseUrl = getApiUrl();
+    const res = await fetch(new URL('/api/otp/verify', baseUrl).toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, otp: code, deviceId }),
+    });
+    const data = (await res.json().catch(() => ({}))) as any;
     
     if (data.success) {
       console.log('[Fallback OTP] Verified successfully');

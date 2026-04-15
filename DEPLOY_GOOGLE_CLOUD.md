@@ -9,17 +9,18 @@ Your backend CORS has been updated to allow Firebase Hosting. To apply this to C
 cd /path/to/your/project
 
 # 2. Build and deploy to Cloud Run
-PROJECT_ID=mobile-repair-app-276b6   # replace if different
-SERVICE_NAME=repair-backend
-REGION=us-central1
+PROJECT_ID=mobi-backend-491410   # GCP project for Cloud Run (adjust if different)
+SERVICE_NAME=repair-backendarun
+REGION=asia-south1
 
-gcloud builds submit --tag gcr.io/$PROJECT_ID/$SERVICE_NAME .
+gcloud builds submit --tag us-central1-docker.pkg.dev/$PROJECT_ID/mobi-repo/$SERVICE_NAME:latest .
 gcloud run deploy $SERVICE_NAME \
-  --image gcr.io/$PROJECT_ID/$SERVICE_NAME \
+  --image us-central1-docker.pkg.dev/$PROJECT_ID/mobi-repo/$SERVICE_NAME:latest \
   --region $REGION \
   --platform managed \
   --allow-unauthenticated \
   --memory 1Gi \
+  --timeout 300 \
   --cpu 1 \
   --min-instances 1 \
   --port 8080
@@ -27,9 +28,9 @@ gcloud run deploy $SERVICE_NAME \
 
 Or to just update CORS without rebuilding (fastest):
 ```bash
-gcloud run services update repair-backend \
-  --region us-central1 \
-  --update-env-vars ALLOWED_ORIGINS="https://mobile-repair-app-276b6.web.app,https://mobile-repair-app-276b6.firebaseapp.com,https://atozmobilerepair.in"
+gcloud run services update repair-backendarun \
+  --region asia-south1 \
+  --update-env-vars ALLOWED_ORIGINS="https://arunmobi-app.web.app,https://arunmobi-app.firebaseapp.com,https://atozmobilerepair.in"
 ```
 
 ## Production Domain

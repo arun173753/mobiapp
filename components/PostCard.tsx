@@ -146,11 +146,11 @@ export default function PostCard({
 
   const handleShare = async () => {
     try {
-      const message = `Check out this ${post.category} post by ${post.userName}:\n\n"${post.text.slice(0, 100)}${post.text.length > 100 ? '...' : ''}"\n\nhttps://mobile-repair-app-276b6.web.app`;
+      const message = `Check out this ${post.category} post by ${post.userName}:\n\n"${post.text.slice(0, 100)}${post.text.length > 100 ? '...' : ''}"\n\nhttps://arunmobi-app.web.app`;
       await Share.share({
         message,
         title: `${post.category.toUpperCase()} - ${post.userName}`,
-        url: 'https://mobile-repair-app-276b6.web.app',
+        url: 'https://arunmobi-app.web.app',
       });
     } catch (e: any) {
       console.log('Share error:', e.message);
@@ -162,7 +162,7 @@ export default function PostCard({
     if (!currentUserId) return;
     const trackView = async () => {
       try {
-        await apiRequest('POST', `/api/posts/${post.id}/view`, { userId: currentUserId });
+        await apiRequest('POST', `/api/posts/${post.id}/view`, { userId: currentUserId }, { timeoutMs: 25000 });
       } catch (e) {
         console.log('View tracking failed:', e);
       }

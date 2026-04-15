@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, Pressable, Platform, Alert, ScrollView, TextInput, Switch, ActivityIndicator, RefreshControl, TouchableOpacity, Modal, KeyboardAvoidingView
+  View, Text, StyleSheet, FlatList, Pressable, Platform, Alert, ScrollView, TextInput, Switch, ActivityIndicator, RefreshControl, TouchableOpacity, Modal, KeyboardAvoidingView,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -63,6 +64,9 @@ const ROLE_COLORS: Record<UserRole | 'admin', string> = {
   customer: '#FF2D55',
   admin: '#8E8E93',
 };
+
+/** Matches server `getDefaultPushNotificationImageUrl` fallback for preview + rich push. */
+const DEFAULT_PUSH_NOTIFICATION_IMAGE = 'https://arunmobi-app.web.app/notification-default.png';
 
 const NOTIF_ROLE_OPTIONS = [
   { key: 'all', label: 'All Users', color: '#007AFF' },
@@ -450,11 +454,18 @@ export default function AdminScreen() {
 
   const [notifTitle, setNotifTitle] = useState('');
   const [notifBody, setNotifBody] = useState('');
+  /** HTTPS image URL (admin upload or pasted URL); empty → server uses default art. */
+  const [notifImageUrl, setNotifImageUrl] = useState('');
+  /** In-app route when user taps (e.g. /(tabs), /directory). Sent as data.path + OneSignal url when APP domain is set. */
+  const [notifOpenPath, setNotifOpenPath] = useState('/(tabs)');
+  const [notifImageUploading, setNotifImageUploading] = useState(false);
   const [notifSending, setNotifSending] = useState(false);
   const [notifResult, setNotifResult] = useState<string | null>(null);
   const [pushStats, setPushStats] = useState<{ total: number; withToken: number; byRole?: Record<string, number> } | null>(null);
   const [pushStatsLoading, setPushStatsLoading] = useState(false);
   const [notifTargetRole, setNotifTargetRole] = useState<string>('all');
+  const [broadcastPushHistory, setBroadcastPushHistory] = useState<any[]>([]);
+  const [broadcastHistoryLoading, setBroadcastHistoryLoading] = useState(false);
 
   const [smsBody, setSmsBody] = useState('');
   const [smsSending, setSmsSending] = useState(false);
@@ -1438,11 +1449,25 @@ export default function AdminScreen() {
     }
   }, []);
 
+  const fetchBroadcastPushHistory = useCallback(async () => {
+    try {
+      setBroadcastHistoryLoading(true);
+      const res = await apiRequest('GET', '/api/admin/push-broadcast-history');
+      const data = await res.json().catch(() => ({}));
+      if (data?.success && Array.isArray(data.items)) setBroadcastPushHistory(data.items);
+    } catch (e) {
+      console.warn('Failed to fetch push broadcast history:', e);
+    } finally {
+      setBroadcastHistoryLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (activeTab === 'notifications') {
       fetchPushStats();
+      fetchBroadcastPushHistory();
     }
-  }, [activeTab, fetchPushStats]);
+  }, [activeTab, fetchPushStats, fetchBroadcastPushHistory]);
 
   const fetchLockNotifications = useCallback(async () => {
     try {
@@ -1516,24 +1541,95 @@ export default function AdminScreen() {
     ]);
   }, [fetchLockNotifications, refreshData]);
 
+  const effectivePushPreviewImage = useMemo(() => {
+    const u = notifImageUrl.trim();
+    if (!u) return DEFAULT_PUSH_NOTIFICATION_IMAGE;
+    if (/^https:\/\/.+\.(jpe?g|png)(\?.*)?$/i.test(u)) return u;
+    return DEFAULT_PUSH_NOTIFICATION_IMAGE;
+  }, [notifImageUrl]);
+
+  const uploadAdminPushImage = useCallback(async (assetUri: string, mimeType?: string | null) => {
+    const token = await getSessionToken();
+    const baseUrl = getApiUrl();
+    const form = new FormData();
+    if (Platform.OS === 'web') {
+      const blob = await (await fetch(assetUri)).blob();
+      const name = blob.type === 'image/png' ? 'push.png' : 'push.jpg';
+      form.append('image', blob, name);
+    } else {
+      const mime = mimeType === 'image/png' ? 'image/png' : 'image/jpeg';
+      const ext = mime === 'image/png' ? 'png' : 'jpg';
+      form.append('image', { uri: assetUri, name: `push.${ext}`, type: mime } as any);
+    }
+    const res = await fetch(`${baseUrl}/api/admin/upload-push-image`, {
+      method: 'POST',
+      headers: {
+        ...(token ? { 'x-session-token': token, Authorization: `Bearer ${token}` } : {}),
+      },
+      body: form,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success || !data.url) {
+      throw new Error(data.message || `Upload failed (${res.status})`);
+    }
+    return String(data.url);
+  }, []);
+
+  const pickPushNotificationImage = useCallback(async () => {
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Permission', 'Photo library access is needed to attach an image.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        quality: 0.85,
+        base64: false,
+      });
+      if (result.canceled || !result.assets?.[0]?.uri) return;
+      setNotifImageUploading(true);
+      const a = result.assets[0];
+      const url = await uploadAdminPushImage(a.uri, (a as { mimeType?: string }).mimeType);
+      setNotifImageUrl(url);
+    } catch (e: any) {
+      Alert.alert('Upload failed', e?.message || 'Could not upload image (JPG/PNG, max 1MB).');
+    } finally {
+      setNotifImageUploading(false);
+    }
+  }, [uploadAdminPushImage]);
+
   const sendNotificationToAll = useCallback(async () => {
     if (!notifTitle.trim() || !notifBody.trim()) {
       Alert.alert('Error', 'Please enter both title and message.');
+      return;
+    }
+    const img = notifImageUrl.trim();
+    if (img && !/^https:\/\/.+\.(jpe?g|png)(\?.*)?$/i.test(img)) {
+      Alert.alert('Invalid image URL', 'Use an HTTPS link ending in .jpg, .jpeg, or .png (or upload a file).');
       return;
     }
     try {
       setNotifSending(true);
       setNotifResult(null);
       const endpoint = notifTargetRole === 'all' ? '/api/admin/notify-all' : '/api/admin/notify-role';
-      const payload: any = { title: notifTitle.trim(), body: notifBody.trim() };
+      const payload: Record<string, unknown> = { title: notifTitle.trim(), body: notifBody.trim() };
       if (notifTargetRole !== 'all') payload.role = notifTargetRole;
+      if (img) payload.image = img;
+      const p = notifOpenPath.trim();
+      if (p) payload.path = p;
       const res = await adminRequest('POST', endpoint, payload);
       const data = await res.json();
       if (data.success) {
         const roleLabel = notifTargetRole === 'all' ? 'all users' : `all ${notifTargetRole}s`;
-        setNotifResult(`✅ Sent to ${data.sent} device${data.sent !== 1 ? 's' : ''} (${roleLabel})`);
+        const idHint = data.oneSignalId ? ` · OS id ${String(data.oneSignalId).slice(0, 10)}…` : '';
+        setNotifResult(`✅ Sent to ${data.sent} device${data.sent !== 1 ? 's' : ''} (${roleLabel})${idHint}`);
         setNotifTitle('');
         setNotifBody('');
+        setNotifImageUrl('');
+        setNotifOpenPath('/(tabs)');
+        fetchBroadcastPushHistory();
       } else {
         setNotifResult(`❌ Failed: ${data.message || 'Unknown error'}`);
       }
@@ -1542,7 +1638,7 @@ export default function AdminScreen() {
     } finally {
       setNotifSending(false);
     }
-  }, [notifTitle, notifBody, notifTargetRole]);
+  }, [notifTitle, notifBody, notifImageUrl, notifOpenPath, notifTargetRole]);
 
   const sendSMS = useCallback(async () => {
     if (!smsBody.trim()) {
@@ -1857,12 +1953,19 @@ export default function AdminScreen() {
                       {item.userName}
                     </Text>
                     {rawVideoUrl ? (
-                      <video
-                        controls
-                        src={rawVideoUrl}
-                        style={{ width: '100%', maxWidth: 320, marginTop: 8, borderRadius: 8, backgroundColor: '#000' }}
-                        onError={() => console.error('[Admin][Reels] video load error', rawVideoUrl)}
-                      />
+                      <Pressable
+                        onPress={() => router.push({ pathname: '/reels', params: { reelId: String(item.id) } } as any)}
+                        style={{
+                          marginTop: 8,
+                          alignSelf: 'flex-start',
+                          backgroundColor: C.primary,
+                          paddingHorizontal: 12,
+                          paddingVertical: 8,
+                          borderRadius: 10,
+                        }}
+                      >
+                        <Text style={{ color: '#fff', fontFamily: 'Inter_700Bold', fontSize: 12 }}>Open full-screen</Text>
+                      </Pressable>
                     ) : null}
                     <View style={{ flexDirection: 'row', gap: 12, marginTop: 6 }}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
@@ -3427,6 +3530,114 @@ export default function AdminScreen() {
               }}
             />
           </View>
+          <View>
+            <Text style={{ fontSize: 12, fontFamily: 'Inter_600SemiBold', color: C.textSecondary, marginBottom: 6 }}>
+              Image (optional)
+            </Text>
+            <Text style={{ fontSize: 11, fontFamily: 'Inter_400Regular', color: C.textTertiary, marginBottom: 8 }}>
+              HTTPS JPG/PNG only, max 1MB upload. If empty, a default MOBI image is used for every send.
+            </Text>
+            <TextInput
+              value={notifImageUrl}
+              onChangeText={setNotifImageUrl}
+              placeholder="https://…/image.jpg or upload below"
+              placeholderTextColor={C.textTertiary}
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={{
+                backgroundColor: C.surfaceElevated,
+                color: C.text,
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 10,
+                fontSize: 14,
+                fontFamily: 'Inter_400Regular',
+                borderWidth: 1,
+                borderColor: C.border,
+                marginBottom: 10,
+              }}
+            />
+            <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+              <Pressable
+                onPress={pickPushNotificationImage}
+                disabled={notifImageUploading || notifSending}
+                style={{
+                  paddingHorizontal: 14,
+                  paddingVertical: 10,
+                  borderRadius: 10,
+                  backgroundColor: C.surfaceElevated,
+                  borderWidth: 1,
+                  borderColor: C.border,
+                  opacity: notifImageUploading ? 0.6 : 1,
+                }}
+              >
+                <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: C.text }}>
+                  {notifImageUploading ? 'Uploading…' : 'Upload JPG/PNG'}
+                </Text>
+              </Pressable>
+              {!!notifImageUrl.trim() && (
+                <Pressable
+                  onPress={() => setNotifImageUrl('')}
+                  style={{ paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, backgroundColor: '#FF3B3020' }}
+                >
+                  <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: '#FF3B30' }}>Clear image</Text>
+                </Pressable>
+              )}
+            </View>
+            <Text style={{ fontSize: 11, fontFamily: 'Inter_600SemiBold', color: C.textSecondary, marginBottom: 6 }}>Preview</Text>
+            <View
+              style={{
+                borderRadius: 14,
+                overflow: 'hidden',
+                borderWidth: 1,
+                borderColor: C.border,
+                backgroundColor: '#0f172a',
+                maxWidth: 420,
+                alignSelf: 'flex-start',
+              }}
+            >
+              <Image
+                source={{ uri: effectivePushPreviewImage }}
+                style={{ width: '100%', aspectRatio: 16 / 9, maxHeight: 200 }}
+                contentFit="cover"
+              />
+              <View style={{ padding: 12, backgroundColor: C.surfaceElevated }}>
+                <Text style={{ fontSize: 14, fontFamily: 'Inter_700Bold', color: C.text }} numberOfLines={1}>
+                  {notifTitle.trim() || 'Notification title'}
+                </Text>
+                <Text style={{ fontSize: 12, fontFamily: 'Inter_400Regular', color: C.textSecondary, marginTop: 4 }} numberOfLines={3}>
+                  {notifBody.trim() || 'Message body will appear here…'}
+                </Text>
+              </View>
+            </View>
+          </View>
+          <View>
+            <Text style={{ fontSize: 12, fontFamily: 'Inter_600SemiBold', color: C.textSecondary, marginBottom: 6 }}>
+              Open screen on tap (Android)
+            </Text>
+            <Text style={{ fontSize: 11, fontFamily: 'Inter_400Regular', color: C.textTertiary, marginBottom: 8 }}>
+              Expo Router path, e.g. /(tabs), /directory, /reels. Server adds full HTTPS launch URL when EXPO_PUBLIC_DOMAIN or APP_DOMAIN is set on the API.
+            </Text>
+            <TextInput
+              value={notifOpenPath}
+              onChangeText={setNotifOpenPath}
+              placeholder="/(tabs)"
+              placeholderTextColor={C.textTertiary}
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={{
+                backgroundColor: C.surfaceElevated,
+                color: C.text,
+                borderRadius: 10,
+                paddingHorizontal: 14,
+                paddingVertical: 10,
+                fontSize: 14,
+                fontFamily: 'Inter_400Regular',
+                borderWidth: 1,
+                borderColor: C.border,
+              }}
+            />
+          </View>
           {notifResult && (
             <Pressable
               onPress={() => setNotifResult(null)}
@@ -3462,6 +3673,60 @@ export default function AdminScreen() {
             </Text>
           </Pressable>
         </View>
+      </View>
+
+      <View style={[styles.subCard, { borderLeftColor: '#8E8E93', borderLeftWidth: 3, marginTop: 16 }]}>
+        <View style={styles.subCardHeader}>
+          <View style={styles.subCardLeft}>
+            <View style={[styles.subRoleIcon, { backgroundColor: '#8E8E9320' }]}>
+              <Ionicons name="time" size={20} color="#8E8E93" />
+            </View>
+            <View>
+              <Text style={styles.subRoleName}>Broadcast history</Text>
+              <Text style={{ color: C.textTertiary, fontSize: 11, fontFamily: 'Inter_400Regular', marginTop: 2 }}>
+                Last 100 admin sends (stored on server)
+              </Text>
+            </View>
+          </View>
+          <Pressable onPress={fetchBroadcastPushHistory} style={{ padding: 6 }}>
+            <Ionicons name="refresh" size={18} color="#8E8E93" />
+          </Pressable>
+        </View>
+        {broadcastHistoryLoading ? (
+          <ActivityIndicator size="small" color="#8E8E93" style={{ marginTop: 10 }} />
+        ) : broadcastPushHistory.length === 0 ? (
+          <Text style={{ fontSize: 13, color: C.textTertiary, marginTop: 10 }}>No entries yet.</Text>
+        ) : (
+          <View style={{ marginTop: 10, gap: 8 }}>
+            {broadcastPushHistory.slice(0, 30).map((row: any) => (
+              <View
+                key={row.id}
+                style={{
+                  padding: 10,
+                  borderRadius: 10,
+                  backgroundColor: C.surfaceElevated,
+                  borderWidth: 1,
+                  borderColor: C.border,
+                }}
+              >
+                <Text style={{ fontSize: 13, fontFamily: 'Inter_600SemiBold', color: C.text }} numberOfLines={1}>
+                  {row.title}
+                </Text>
+                <Text style={{ fontSize: 12, color: C.textSecondary, marginTop: 4 }} numberOfLines={2}>
+                  {row.body}
+                </Text>
+                <Text style={{ fontSize: 10, color: C.textTertiary, marginTop: 6 }}>
+                  {row.error
+                    ? `Error: ${row.error}`
+                    : `Recipients: ${row.recipientCount ?? 0}${row.oneSignalId ? ` · ${String(row.oneSignalId).slice(0, 12)}…` : ''}`}
+                  {row.openPath ? ` · ${row.openPath}` : ''}
+                  {' · '}
+                  {row.createdAt ? new Date(Number(row.createdAt)).toLocaleString() : ''}
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
       </View>
 
       <View style={[styles.subCard, { borderLeftColor: '#34C759', borderLeftWidth: 3, marginTop: 16 }]}>

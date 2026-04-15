@@ -1,0 +1,34 @@
+# Build API image for Cloud Run service repair-backendarun (asia-south1).
+# Run: gcloud builds submit --config=cloudbuild-repair-backend.yaml --project=mobi-backend-491410
+steps:
+  - name: node:20-bookworm-slim
+    entrypoint: npm
+    args: ["ci", "--ignore-scripts"]
+    env:
+      - "NODE_ENV=development"
+
+  - name: node:20-bookworm-slim
+    entrypoint: npm
+    args: ["run", "server:build"]
+    env:
+      - "NODE_ENV=production"
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - asia-south1-docker.pkg.dev/mobi-backend-491410/cloud-run-source-deploy/repair-backend:latest
+      - -f
+      - Dockerfile.prod
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - asia-south1-docker.pkg.dev/mobi-backend-491410/cloud-run-source-deploy/repair-backend:latest
+
+images:
+  - asia-south1-docker.pkg.dev/mobi-backend-491410/cloud-run-source-deploy/repair-backend:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
