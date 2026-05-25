@@ -4,7 +4,7 @@ import { getFirestore, getAdminAuth, getStorage } from "./firebase-admin";
 import { db } from "./db";
 import OpenAI from "openai";
 import { notifyAllUsers, notifyNewPost, notifyUser, notifyLiveChat, sendNotification, getDeviceCount, notifyUsersByRole, getOneSignalSubscriberCount, isOneSignalConfigured, sendNotificationToSubscriptionIds } from "./push-notifications";
-import { profiles, conversations, messages, posts, jobs, reels, products, orders, subscriptionSettings, courses, courseChapters, courseVideos, courseEnrollments, dubbedVideos, ads, liveChatMessages, liveClasses, liveSessions, courseNotices, sessions, payments, teacherPayouts, appSettings, videoProgress, livePolls, livePollVotes, emailCampaigns, otpTokens, adminNotifications, broadcastPushLogs, repairBookings, protectionPlans, protectionClaims, leads, leadClaims } from "@shared/schema";
+import { users, profiles, conversations, messages, posts, jobs, reels, products, orders, subscriptionSettings, courses, courseChapters, courseVideos, courseEnrollments, dubbedVideos, ads, liveChatMessages, liveClasses, liveSessions, courseNotices, sessions, payments, teacherPayouts, appSettings, videoProgress, livePolls, livePollVotes, emailCampaigns, otpTokens, adminNotifications, broadcastPushLogs, repairBookings, protectionPlans, protectionClaims, leads, leadClaims } from "@shared/schema";
 import { sendWelcomeEmail, sendOTPEmail } from "./lib/sendEmail";
 import { eq, or, and, desc, gt, gte, lt, sql, ne, isNotNull, isNull } from "drizzle-orm";
 import { randomUUID } from "crypto";
@@ -23,6 +23,32 @@ import {
 } from "./config/public-urls";
 
 const googleAuthTokens = new Map<string, { email: string; name: string; createdAt: number }>();
+
+/** NDJSON debug log (local dev: writes to repo root; ignored if cwd differs). Session 171936. */
+function appendDebugSessionLog(entry: Record<string, unknown>) {
+  try {
+    const logPath = path.join(process.cwd(), "debug-171936.log");
+    fs.appendFileSync(
+      logPath,
+      JSON.stringify({ sessionId: "171936", timestamp: Date.now(), ...entry }) + "\n",
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+function bunnyContentTypeForStorageName(filename: string): string {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".gif")) return "image/gif";
+  if (lower.endsWith(".mp4")) return "video/mp4";
+  if (lower.endsWith(".mov")) return "video/quicktime";
+  if (lower.endsWith(".webm")) return "video/webm";
+  if (lower.endsWith(".m4v")) return "video/x-m4v";
+  return "application/octet-stream";
+}
 
 function getGoogleClientSecret(): string | undefined {
   const raw = process.env.GOOGLE_CLIENT_SECRET;
@@ -115,68 +141,55 @@ function getBunnyStreamUrls(videoId: string, libraryId = BUNNY_STREAM_LIBRARY_ID
   const lib = String(libraryId || "").trim();
   const id = String(videoId || "").trim();
   return {
-    embedUrl: `https://iframe.mediadelivery.net/embed/${lib}/${id}`,
     hlsUrl: `https://vz-${lib}.b-cdn.net/${id}/playlist.m3u8`,
     mp4Url: `https://vz-${lib}.b-cdn.net/${id}/play_720p.mp4`,
     thumbnailUrl: `https://vz-${lib}.b-cdn.net/${id}/thumbnail.jpg`,
   };
 }
 
-function isPlayableReelVideoUrl(url: unknown): boolean {
-  if (typeof url !== "string") return false;
-  const value = url.trim().toLowerCase();
-  if (!value) return false;
-  return /\.mp4(\?|#|$)/i.test(value) || /\.m3u8(\?|#|$)/i.test(value);
+function isBunnyReadyStatus(rawStatus: unknown, encodeProgress?: unknown): boolean {
+  const status = Number(rawStatus);
+  const progress = Number(encodeProgress ?? 0);
+  return status === 3 || status === 4 || progress >= 100;
 }
 
-function normalizePlayableReelVideoUrl(url: unknown, libraryId = BUNNY_STREAM_LIBRARY_ID): string {
-  if (typeof url !== "string") return "";
-  const value = url.trim();
-  if (!value) return "";
-  if (isPlayableReelVideoUrl(value)) return value;
-
-  const videoId =
-    value.match(/b-cdn\.net\/([a-f0-9-]{36})\//i)?.[1] ||
-    value.match(/embed\/\d+\/([a-f0-9-]{36})/i)?.[1] ||
-    value.match(/mediadelivery\.net\/[^/]+\/([a-f0-9-]{36})/i)?.[1] ||
-    "";
-  const libFromUrl = value.match(/vz-(\d+)\.b-cdn\.net/i)?.[1] || libraryId;
-  if (!videoId || !libFromUrl) return "";
-  return getBunnyStreamUrls(videoId, libFromUrl).mp4Url;
-}
-
-function getBunnyVideoRefFromUrl(url: string): { videoId: string; libraryId: string } | null {
-  const value = String(url || "").trim();
-  if (!value) return null;
-  const m = value.match(/vz-(\d+)\.b-cdn\.net\/([a-f0-9-]{36})\//i);
-  if (m) return { libraryId: m[1], videoId: m[2] };
-  const e = value.match(/embed\/(\d+)\/([a-f0-9-]{36})/i);
-  if (e) return { libraryId: e[1], videoId: e[2] };
-  const idOnly = value.match(/([a-f0-9-]{36})/i)?.[1] || "";
-  if (idOnly && BUNNY_STREAM_LIBRARY_ID) {
-    return { libraryId: BUNNY_STREAM_LIBRARY_ID, videoId: idOnly };
-  }
-  return null;
-}
-
-const bunnyVideoPlayableCache = new Map<string, { ok: boolean; checkedAt: number }>();
-
-async function isBunnyVideoPlayable(videoId: string, libraryId: string): Promise<boolean> {
-  const key = `${libraryId}:${videoId}`;
-  const now = Date.now();
-  const cached = bunnyVideoPlayableCache.get(key);
-  if (cached && now - cached.checkedAt < 5 * 60 * 1000) {
-    return cached.ok;
-  }
+function parseJsonArray<T>(value: unknown): T[] {
+  if (Array.isArray(value)) return value as T[];
+  if (typeof value !== "string" || !value.trim()) return [];
   try {
-    const status = await fetchBunnyVideoStatus(videoId, libraryId);
-    const ok = Number(status?.status) === 3;
-    bunnyVideoPlayableCache.set(key, { ok, checkedAt: now });
-    return ok;
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
   } catch {
-    // Keep reel visible on transient status-check failures.
-    return true;
+    return [];
   }
+}
+
+function mapReelRecord(record: any) {
+  const caption =
+    typeof record?.caption === "string" && record.caption.trim()
+      ? record.caption.trim()
+      : typeof record?.description === "string" && record.description.trim()
+        ? record.description.trim()
+        : typeof record?.title === "string"
+          ? record.title.trim()
+          : "";
+
+  return {
+    id: String(record?.id || ""),
+    userId: String(record?.userId || ""),
+    userName: String(record?.userName || "User"),
+    userAvatar: String(record?.userAvatar || ""),
+    videoId: String(record?.videoId || ""),
+    caption,
+    title: typeof record?.title === "string" ? record.title : "",
+    description: typeof record?.description === "string" ? record.description : "",
+    videoUrl: String(record?.videoUrl || ""),
+    thumbnailUrl: String(record?.thumbnailUrl || ""),
+    likes: parseJsonArray<string>(record?.likes),
+    comments: parseJsonArray<any>(record?.comments),
+    views: Number(record?.views || 0),
+    createdAt: Number(record?.createdAt || Date.now()),
+  };
 }
 
 async function fetchBunnyVideoStatus(videoId: string, libraryId = BUNNY_STREAM_LIBRARY_ID) {
@@ -196,31 +209,20 @@ async function fetchBunnyVideoStatus(videoId: string, libraryId = BUNNY_STREAM_L
   return await res.json() as any;
 }
 
-async function waitForBunnyPlayableUrl(
-  videoId: string,
-  {
-    libraryId = BUNNY_STREAM_LIBRARY_ID,
-    timeoutMs = 20 * 1000,
-    intervalMs = 4000,
-  }: {
-    libraryId?: string;
-    timeoutMs?: number;
-    intervalMs?: number;
-  } = {},
-): Promise<{ videoUrl: string; thumbnailUrl: string; status: any }> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const status = await fetchBunnyVideoStatus(videoId, libraryId);
-    if (status?.status === 3) {
-      const urls = getBunnyStreamUrls(videoId, libraryId);
-      return { videoUrl: urls.mp4Url, thumbnailUrl: urls.thumbnailUrl, status };
-    }
-    if (status?.status === 4) {
-      throw new Error("Bunny encoding failed");
-    }
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
-  }
-  throw new Error("Video is still processing. Please try posting again in a minute.");
+function buildReelStatusResponse(videoId: string, libraryId: string, status: any) {
+  const urls = getBunnyStreamUrls(videoId, libraryId);
+  const ready = isBunnyReadyStatus(status?.status, status?.encodeProgress);
+  return {
+    success: true,
+    videoId,
+    status: ready ? "ready" : "processing",
+    rawStatus: Number(status?.status ?? 0),
+    encodeProgress: Number(status?.encodeProgress ?? 0),
+    playbackUrl: urls.hlsUrl,
+    hlsUrl: urls.hlsUrl,
+    mp4Url: urls.mp4Url,
+    thumbnailUrl: urls.thumbnailUrl,
+  };
 }
 
 // Strip EXIF data from JPEG using Buffer manipulation (no external deps)
@@ -268,15 +270,7 @@ async function uploadToStorage(buffer: Buffer, filename: string): Promise<string
     try {
       const url = `${BUNNY_STORAGE_ENDPOINT}/${BUNNY_STORAGE_ZONE_NAME}/${filename}`;
       console.log(`[Bunny] Uploading to: ${url}`);
-      const contentType = filename.endsWith('.mp4')
-        ? 'video/mp4'
-        : filename.endsWith('.mov')
-          ? 'video/quicktime'
-          : filename.endsWith('.webm')
-            ? 'video/webm'
-            : filename.endsWith('.m4v')
-              ? 'video/x-m4v'
-              : 'application/octet-stream';
+      const contentType = bunnyContentTypeForStorageName(filename);
       const response = await Promise.race([
         fetch(url, {
           method: 'PUT',
@@ -301,7 +295,10 @@ async function uploadToStorage(buffer: Buffer, filename: string): Promise<string
       } else {
         const text = await response.text().catch(() => '');
         console.error(`[Bunny] ✗ Failed: ${response.status} ${text.slice(0, 200)}`);
-        throw new Error(`Bunny returned ${response.status}`);
+        const err: any = new Error(`Bunny returned ${response.status}`);
+        err.bunnyStatus = response.status;
+        err.bunnyBodyPreview = text.slice(0, 500);
+        throw err;
       }
     } catch (error: any) {
       console.error(`[Bunny] Error: ${error?.message || String(error)}`);
@@ -411,6 +408,22 @@ const memStorage = multer.memoryStorage();
 /** Image / small media: stream to disk (avoid buffering large files in RAM). */
 const upload = multer({
   storage: diskStorage,
+  limits: { fileSize: 55 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith("image/") || file.mimetype.startsWith("video/")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only image and video files are allowed"));
+    }
+  },
+});
+
+/**
+ * Same filters as `upload`, but buffers in RAM. Used for /api/upload and /api/upload-image so
+ * Cloud Run / serverless containers do not require a writable cwd/uploads directory (often read-only).
+ */
+const uploadImageMemory = multer({
+  storage: memStorage,
   limits: { fileSize: 55 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     if (file.mimetype.startsWith("image/") || file.mimetype.startsWith("video/")) {
@@ -942,212 +955,190 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/upload", upload.single("image"), async (req, res) => {
-    try {
-      console.log('[Upload] POST /api/upload - Request received');
-      if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
-      const ext = path.extname(req.file.originalname) || '.jpg';
-      const filename = `images/${randomUUID()}${ext}`;
-      const localPath = req.file.path;
-      const stream = fs.createReadStream(localPath);
-      let url: string;
-      try {
-        url = await uploadStreamToStorage(
-          stream,
-          filename,
-          req.file.mimetype || "application/octet-stream",
-          req.file.size,
-        );
-      } finally {
-        fs.unlink(localPath, () => {});
-      }
-      res.json({ success: true, url });
-    } catch (error) {
-      console.error("[Upload] Error:", error);
-      res.status(500).json({ success: false, message: "Upload failed" });
-    }
+  app.get("/api/upload", (_req, res) => {
+    return res.status(405).json({
+      success: false,
+      error: "Method Not Allowed",
+      message: "Use POST /api/upload with multipart/form-data field `file`.",
+    });
   });
 
-  app.post("/api/upload-image", upload.single("image"), async (req, res) => {
+  app.post(
+    "/api/upload",
+    uploadImageMemory.fields([
+      { name: "file", maxCount: 1 },
+      { name: "image", maxCount: 1 },
+    ]),
+    async (req, res) => {
     try {
-      if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
-      const ext = path.extname(req.file.originalname) || '.jpg';
-      const filename = `images/${randomUUID()}${ext}`;
-      const localPath = req.file.path;
-      const stream = fs.createReadStream(localPath);
-      let url: string;
-      try {
-        url = await uploadStreamToStorage(
-          stream,
-          filename,
-          req.file.mimetype || "application/octet-stream",
-          req.file.size,
-        );
-      } finally {
-        fs.unlink(localPath, () => {});
-      }
-      res.json({ success: true, url });
-    } catch (error: any) {
-      console.error("[Upload] Error:", error);
-      res.status(500).json({ success: false, message: error.message || "Upload failed" });
-    }
-  });
-
-  /**
-   * Large reel fallback: multipart video → server-side Bunny Stream upload (streaming PUT).
-   * Returns `videoId` + `playbackUrl` (mediadelivery embed) for consistent client behavior.
-   */
-  app.post("/api/reels/upload-video", videoUpload.single("video"), async (req, res) => {
-    try {
-      if (!req.file) {
-        return res.status(400).json({ success: false, message: "No video file" });
-      }
-      const userId = String((req.body?.userId || req.query?.userId || "") as any).trim();
-      console.log(
-        "UPLOAD START",
-        {
-          userId: userId || "(missing)",
-          name: req.file.originalname,
-          mime: req.file.mimetype,
-          size: req.file.size,
-          sizeMB: Math.round((req.file.size || 0) / 1024 / 1024),
+      const filesMap = req.files as Record<string, Express.Multer.File[]> | undefined;
+      const uploadedFile =
+        req.file ||
+        filesMap?.file?.[0] ||
+        filesMap?.image?.[0] ||
+        null;
+      // #region agent log
+      appendDebugSessionLog({
+        hypothesisId: "P3",
+        location: "server/routes.ts:upload",
+        message: "upload endpoint entry",
+        data: {
+          hasFile: !!uploadedFile,
+          originalName: String(uploadedFile?.originalname || ""),
+          mimeType: String(uploadedFile?.mimetype || ""),
+          size: Number(uploadedFile?.size || 0),
+          expectedField: "file",
+          storage: "memory",
         },
-      );
-      const localPath = req.file.path;
-      try {
-        if (!bunnyStreamAvailable) {
-          return res.status(503).json({
-            success: false,
-            message: "Bunny Stream not configured. Reels require Bunny Stream encoding for reliable playback.",
-          });
-        }
+      });
+      fetch('http://127.0.0.1:7396/ingest/e08883fb-7681-4f03-a83e-04cd3d0a3658',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'171936'},body:JSON.stringify({sessionId:'171936',runId:'pre-fix',hypothesisId:'P3',location:'server/routes.ts:upload',message:'upload endpoint entry',data:{hasFile:!!uploadedFile,originalName:String(uploadedFile?.originalname||''),mimeType:String(uploadedFile?.mimetype||''),size:Number(uploadedFile?.size||0),expectedField:'file'},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
 
-        // 1) Create Bunny Stream video entry
-        const title =
-          typeof req.body?.title === "string" && req.body.title.trim()
-            ? req.body.title.trim().slice(0, 500)
-            : "reel-upload";
-        const bunnyCreateUrl = `https://video.bunnycdn.com/library/${BUNNY_STREAM_LIBRARY_ID}/videos`;
-        console.log("[BunnyStream] create-video (fallback)", { title, userId: userId || "(missing)" });
-        const createRes = await fetch(bunnyCreateUrl, {
-          method: "POST",
-          signal: AbortSignal.timeout(60000),
-          headers: {
-            AccessKey: BUNNY_STREAM_API_KEY,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ title }),
-        });
-        const createTxt = await createRes.text().catch(() => "");
-        console.log("[BunnyStream] create-video response", {
-          status: createRes.status,
-          ok: createRes.ok,
-          bodyPreview: createTxt.slice(0, 400),
-        });
-        if (!createRes.ok) {
-          return res.status(502).json({
-            success: false,
-            message: "Bunny Stream create-video failed",
-            bunnyStatus: createRes.status,
-            bunnyError: createTxt.slice(0, 2000),
-          });
-        }
-        let createJson: any = {};
-        try {
-          createJson = JSON.parse(createTxt || "{}");
-        } catch {}
-        const videoId = String(createJson?.guid || "").trim();
-        if (!videoId) {
-          return res.status(502).json({ success: false, message: "Bunny Stream did not return a videoId" });
-        }
-
-        // 2) Upload file to Bunny Stream via streaming PUT (no buffering)
-        const putUrl = `https://video.bunnycdn.com/library/${BUNNY_STREAM_LIBRARY_ID}/videos/${videoId}`;
-        console.log("[BunnyStream] upload PUT start", { videoId, size: req.file.size });
-        const putRes = await Promise.race([
-          fetch(putUrl, {
-            method: "PUT",
-            headers: {
-              AccessKey: BUNNY_STREAM_API_KEY,
-              "Content-Type": req.file.mimetype || "application/octet-stream",
-              "Content-Length": String(req.file.size || 0),
-            },
-            body: fs.createReadStream(localPath),
-            duplex: "half",
-          } as any),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error(`[BunnyStream] PUT timeout after ${BUNNY_PUT_TIMEOUT_MS}ms`)), BUNNY_PUT_TIMEOUT_MS),
-          ),
-        ]) as Response;
-        const putTxt = await putRes.text().catch(() => "");
-        console.log("[BunnyStream] upload PUT response", {
-          status: putRes.status,
-          ok: putRes.ok,
-          bodyPreview: putTxt.slice(0, 400),
-        });
-        if (!putRes.ok && putRes.status !== 201) {
-          return res.status(502).json({
-            success: false,
-            message: "Bunny Stream upload failed",
-            bunnyStatus: putRes.status,
-            bunnyError: putTxt.slice(0, 2000),
-            videoId,
-          });
-        }
-
-        const bunnyUrls = getBunnyStreamUrls(videoId, BUNNY_STREAM_LIBRARY_ID);
-        console.log("UPLOAD SUCCESS", { mode: "bunny_stream_put", videoId });
-        try {
-          const finalMedia = await waitForBunnyPlayableUrl(videoId, { libraryId: BUNNY_STREAM_LIBRARY_ID });
-          return res.json({
-            success: true,
-            videoId,
-            playbackUrl: finalMedia.videoUrl,
-            mp4Url: finalMedia.videoUrl,
-            directUrl: finalMedia.videoUrl,
-            hlsUrl: bunnyUrls.hlsUrl,
-            thumbnailUrl: finalMedia.thumbnailUrl,
-            mode: "bunny_stream_put",
-          });
-        } catch (processingError: any) {
-          const processingMsg = String(processingError?.message || processingError || "");
-          const processingStatusCode = /encoding failed/i.test(processingMsg)
-            ? 422
-            : /still processing/i.test(processingMsg)
-              ? 409
-              : 502;
-          return res.status(processingStatusCode).json({
-            success: false,
-            videoId,
-            message: processingMsg || "Video is still processing. Please try again shortly.",
-            playbackUrl: bunnyUrls.mp4Url,
-            mp4Url: bunnyUrls.mp4Url,
-            directUrl: bunnyUrls.hlsUrl,
-            hlsUrl: bunnyUrls.hlsUrl,
-            thumbnailUrl: bunnyUrls.thumbnailUrl,
-            mode: "bunny_stream_put",
-          });
-        }
-      } finally {
-        fs.unlink(localPath, () => {});
+      if (!uploadedFile?.buffer?.length) {
+        return res.status(400).json({ success: false, error: "No file uploaded" });
       }
+
+      const safeOriginal = String(uploadedFile.originalname || "file.bin").replace(/[^\w.\-]+/g, "_");
+      const fileName = `${Date.now()}-${safeOriginal}`;
+
+      const bunnyZone =
+        process.env.BUNNY_STORAGE_ZONE ||
+        process.env.BUNNY_STORAGE_ZONE_NAME ||
+        "";
+      const bunnyApiKey = process.env.BUNNY_STORAGE_API_KEY || process.env.BUNNY_STORAGE_ACCESS_KEY || "";
+      const bunnyRegion = process.env.BUNNY_STORAGE_REGION || "";
+
+      if (!bunnyZone || !bunnyApiKey) {
+        return res.status(503).json({
+          success: false,
+          error: "Storage not configured",
+          message: "Bunny storage variables are missing.",
+        });
+      }
+
+      const endpoint = bunnyRegion
+        ? `https://${bunnyRegion}.storage.bunnycdn.com`
+        : "https://storage.bunnycdn.com";
+      const uploadUrl = `${endpoint}/${bunnyZone}/${fileName}`;
+
+      console.log("[Upload] Uploading file:", fileName);
+      console.log("[Upload] Bunny URL:", uploadUrl);
+
+      // #region agent log
+      appendDebugSessionLog({
+        hypothesisId: "P3",
+        location: "server/routes.ts:upload",
+        message: "upload endpoint bunny target",
+        data: { fileName, endpoint, bunnyZone },
+      });
+      // #endregion
+
+      const response = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: {
+          AccessKey: bunnyApiKey,
+          "Content-Type": uploadedFile.mimetype || "application/octet-stream",
+        },
+        body: uploadedFile.buffer,
+        duplex: "half",
+      } as any);
+
+      if (!response.ok) {
+        const details = await response.text().catch(() => "");
+        return res.status(500).json({
+          success: false,
+          error: "Bunny upload failed",
+          status: response.status,
+          details: details.slice(0, 500),
+        });
+      }
+
+      const publicBase = (process.env.BUNNY_CDN_URL || "").replace(/\/+$/, "");
+      const url = publicBase ? `${publicBase}/${fileName}` : uploadUrl;
+
+      // #region agent log
+      appendDebugSessionLog({
+        hypothesisId: "P3",
+        location: "server/routes.ts:upload",
+        message: "upload endpoint success",
+        data: { fileName, url },
+      });
+      fetch('http://127.0.0.1:7396/ingest/e08883fb-7681-4f03-a83e-04cd3d0a3658',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'171936'},body:JSON.stringify({sessionId:'171936',runId:'pre-fix',hypothesisId:'P3',location:'server/routes.ts:upload',message:'upload endpoint success',data:{fileName,url},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+
+      return res.status(200).json({ success: true, url });
     } catch (error: any) {
-      console.error("UPLOAD ERROR", error);
-      return res.status(500).json({ success: false, message: error?.message || "Video upload failed" });
+      console.error("[Upload] Error:", error);
+      return res.status(500).json({
+        success: false,
+        error: "Upload failed",
+        message: String(error?.message || error || "Unknown error"),
+      });
+    }
+    }
+  );
+
+  app.post("/api/upload-image", uploadImageMemory.single("image"), async (req, res) => {
+    try {
+      // #region agent log
+      appendDebugSessionLog({
+        hypothesisId: "P3",
+        location: "server/routes.ts:upload-image",
+        message: "upload-image endpoint entry",
+        data: {
+          hasFile: !!req.file,
+          originalName: String(req.file?.originalname || ""),
+          mimeType: String(req.file?.mimetype || ""),
+          size: Number(req.file?.size || 0),
+          storage: "memory",
+        },
+      });
+      fetch('http://127.0.0.1:7396/ingest/e08883fb-7681-4f03-a83e-04cd3d0a3658',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'171936'},body:JSON.stringify({sessionId:'171936',runId:'pre-fix',hypothesisId:'P3',location:'server/routes.ts:949',message:'upload-image endpoint entry',data:{hasFile:!!req.file,originalName:String(req.file?.originalname||''),mimeType:String(req.file?.mimetype||''),size:Number(req.file?.size||0)},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+      if (!req.file?.buffer?.length) {
+        return res.status(400).json({ success: false, message: "No file uploaded" });
+      }
+      const ext = path.extname(req.file.originalname) || '.jpg';
+      const filename = `images/${randomUUID()}${ext}`;
+      const url = await uploadToStorage(req.file.buffer, filename);
+      // #region agent log
+      appendDebugSessionLog({
+        hypothesisId: "P3",
+        location: "server/routes.ts:upload-image",
+        message: "upload-image endpoint success",
+        data: { url },
+      });
+      fetch('http://127.0.0.1:7396/ingest/e08883fb-7681-4f03-a83e-04cd3d0a3658',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'171936'},body:JSON.stringify({sessionId:'171936',runId:'pre-fix',hypothesisId:'P3',location:'server/routes.ts:965',message:'upload-image endpoint success',data:{url},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+      res.json({ success: true, url });
+    } catch (error: any) {
+      console.error("[Upload] Error:", error);
+      const bunnyStatus = Number(error?.bunnyStatus || 0);
+      if (bunnyStatus === 401 || bunnyStatus === 403) {
+        return res.status(503).json({
+          success: false,
+          message: "Image storage authorization failed. Please contact admin.",
+          code: "BUNNY_STORAGE_UNAUTHORIZED",
+        });
+      }
+      return res.status(500).json({ success: false, message: error.message || "Upload failed" });
     }
   });
 
-
-  // ─── Bunny Stream: Create video entry only (no file upload). Client uploads via TUS to Bunny. ───
-  app.post("/api/bunny/create-video", async (req, res) => {
+  app.post("/api/reels/upload", async (req, res) => {
     try {
       if (!bunnyStreamAvailable) {
-        return res.status(503).json({ success: false, message: "Bunny Stream not configured" });
+        return res.status(503).json({
+          success: false,
+          code: "REELS_UPLOAD_UNAVAILABLE",
+          message: "Bunny Stream is not configured for reels upload.",
+        });
       }
+
       const title =
         typeof req.body?.title === "string" && req.body.title.trim().length > 0
           ? req.body.title.trim().slice(0, 500)
-          : "temp-video";
+          : "reel-upload";
 
       const bunnyCreateUrl = `https://video.bunnycdn.com/library/${BUNNY_STREAM_LIBRARY_ID}/videos`;
       const response = await fetch(bunnyCreateUrl, {
@@ -1159,50 +1150,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
         },
         body: JSON.stringify({ title }),
       });
+
       if (!response.ok) {
         const txt = await response.text().catch(() => "");
-        console.error(`[BunnyStream] Create video failed: ${response.status} ${txt.slice(0, 2000)}`);
         return res.status(502).json({
           success: false,
-          message: "Failed to create Bunny Stream video",
-          bunnyStatus: response.status,
-          bunnyError: txt.slice(0, 2000),
+          code: "REELS_UPLOAD_CREATE_FAILED",
+          message: "Failed to create Bunny Stream upload session.",
+          detail: txt.slice(0, 1000),
         });
       }
+
       const data = await response.json() as any;
-      const videoId = data.guid;
-      
-      // Use 6-hour expiry
+      const videoId = String(data?.guid || "").trim();
+      if (!videoId) {
+        return res.status(502).json({
+          success: false,
+          code: "REELS_UPLOAD_CREATE_FAILED",
+          message: "Bunny Stream did not return a video id.",
+        });
+      }
+
       const expires = Math.floor(Date.now() / 1000) + 21600;
-      
-      // Bunny Stream TUS signature: plain SHA256(LibraryId + ApiKey + ExpirationTime + VideoId)
       const signature = crypto
         .createHash("sha256")
         .update(BUNNY_STREAM_LIBRARY_ID + BUNNY_STREAM_API_KEY + expires + videoId)
         .digest("hex");
 
-      const bunnyUrls = getBunnyStreamUrls(videoId, BUNNY_STREAM_LIBRARY_ID);
-      
-      console.log(`[BunnyStream] Created video slot: ${videoId}, expires: ${expires}`);
-
-      // NOTE: Never send BUNNY_STREAM_API_KEY to the client. TUS uses time-limited signature only.
-      // Simple PUT to library/.../videos/{id} with AccessKey must stay server-side (see Bunny docs).
-      res.json({
+      const urls = getBunnyStreamUrls(videoId, BUNNY_STREAM_LIBRARY_ID);
+      return res.json({
         success: true,
         videoId,
         libraryId: BUNNY_STREAM_LIBRARY_ID,
         signature,
         expires,
         uploadUrl: "https://video.bunnycdn.com/tusupload",
-        playbackUrl: bunnyUrls.mp4Url,
-        mp4Url: bunnyUrls.mp4Url,
-        directUrl: bunnyUrls.hlsUrl,
-        hlsUrl: bunnyUrls.hlsUrl,
-        embedUrl: bunnyUrls.embedUrl,
+        playbackUrl: urls.hlsUrl,
+        thumbnailUrl: urls.thumbnailUrl,
       });
     } catch (error: any) {
-      console.error("[BunnyStream] create-video error:", error?.message || error);
-      res.status(503).json({ success: false, message: error?.message || "Internal error" });
+      console.error("[Reels] Upload session error:", error);
+      return res.status(500).json({
+        success: false,
+        code: "REELS_UPLOAD_SESSION_ERROR",
+        message: error?.message || "Failed to create reels upload session.",
+      });
     }
   });
 
@@ -1226,60 +1218,62 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // ─── Bunny Stream: Get video encoding status ───
-  app.get("/api/bunny/video-status/:videoId", async (req, res) => {
+  app.get("/api/reels/status/:videoId", async (req, res) => {
     try {
       if (!bunnyStreamAvailable) {
-        return res.status(503).json({ success: false, message: "Bunny Stream not configured" });
-      }
-      const { videoId } = req.params;
-      const response = await fetch(
-        `https://video.bunnycdn.com/library/${BUNNY_STREAM_LIBRARY_ID}/videos/${videoId}`,
-        {
-          headers: { AccessKey: BUNNY_STREAM_API_KEY },
-          signal: AbortSignal.timeout(45000),
-        },
-      );
-      if (!response.ok) {
-        const txt = await response.text().catch(() => "");
-        console.error(`[BunnyStream] video-status failed: ${response.status} ${txt.slice(0, 500)}`);
-        return res.status(502).json({
+        return res.status(503).json({
           success: false,
-          message: "Failed to get video status",
-          bunnyStatus: response.status,
-          bunnyError: txt.slice(0, 1000),
+          code: "REELS_STATUS_UNAVAILABLE",
+          message: "Bunny Stream is not configured for reels status checks.",
         });
       }
-      const data = await response.json() as any;
-      const bunnyUrls = getBunnyStreamUrls(videoId, BUNNY_STREAM_LIBRARY_ID);
-      res.json({
-        success: true,
-        status: data.status,
-        encodeProgress: data.encodeProgress,
-        length: data.length,
-        thumbnailUrl: data.thumbnailUrl,
-        playbackUrl: bunnyUrls.mp4Url,
-        mp4Url: bunnyUrls.mp4Url,
-        directUrl: bunnyUrls.hlsUrl,
-        hlsUrl: bunnyUrls.hlsUrl,
-        embedUrl: bunnyUrls.embedUrl,
-      });
+      const { videoId } = req.params;
+      const status = await fetchBunnyVideoStatus(videoId, BUNNY_STREAM_LIBRARY_ID);
+      return res.json(buildReelStatusResponse(videoId, BUNNY_STREAM_LIBRARY_ID, status));
     } catch (error: any) {
-      console.error("[BunnyStream] video-status error:", error?.message || error);
-      res.status(500).json({ success: false, message: error?.message || "Internal error" });
+      console.error("[Reels] Status error:", error?.message || error);
+      return res.status(500).json({
+        success: false,
+        code: "REELS_STATUS_ERROR",
+        message: error?.message || "Failed to fetch reels video status.",
+      });
     }
   });
 
 
   app.post("/api/upload-base64", async (req, res) => {
     try {
-      const { base64, mimeType } = req.body;
-      if (!base64) {
+      let raw = typeof req.body?.base64 === "string" ? req.body.base64.trim() : "";
+      // #region agent log
+      appendDebugSessionLog({
+        hypothesisId: "H1",
+        location: "server/routes.ts:upload-base64",
+        message: "upload-base64 entry",
+        data: { rawLen: raw.length, mimeType: String(req.body?.mimeType || "") },
+      });
+      // #endregion
+      if (!raw) {
         return res.status(400).json({ success: false, message: "No image data provided" });
       }
+      if (raw.includes(",")) {
+        raw = raw.split(",").pop() || raw;
+      }
+      raw = raw.replace(/\s/g, "");
+      const { mimeType } = req.body;
       const ext = (mimeType || "image/jpeg").includes("png") ? ".png" : ".jpg";
       const storageName = `images/${randomUUID()}${ext}`;
-      const buffer = Buffer.from(base64, "base64");
+      const buffer = Buffer.from(raw, "base64");
+      // #region agent log
+      appendDebugSessionLog({
+        hypothesisId: "H1",
+        location: "server/routes.ts:upload-base64",
+        message: "upload-base64 decoded",
+        data: { bufferLen: buffer.length },
+      });
+      // #endregion
+      if (!buffer.length) {
+        return res.status(400).json({ success: false, message: "Invalid image data" });
+      }
       const imageUrl = await uploadToStorage(buffer, storageName);
       console.log(`[Upload] Base64 image saved: ${imageUrl} (${buffer.length} bytes)`);
       return res.json({ success: true, url: imageUrl });
@@ -3053,6 +3047,21 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
   app.post("/api/posts", async (req, res) => {
     try {
       const { id, userId, userName, userRole, userAvatar, text: postText, images, videoUrl, category } = req.body;
+      // #region agent log
+      appendDebugSessionLog({
+        hypothesisId: "P1",
+        location: "server/routes.ts:posts-create",
+        message: "posts create entry",
+        data: {
+          userId: String(userId || ""),
+          hasText: !!String(postText || "").trim(),
+          imageCount: Array.isArray(images) ? images.length : -1,
+          videoUrl: String(videoUrl || ""),
+          category: String(category || ""),
+        },
+      });
+      fetch('http://127.0.0.1:7396/ingest/e08883fb-7681-4f03-a83e-04cd3d0a3658',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'171936'},body:JSON.stringify({sessionId:'171936',runId:'pre-fix',hypothesisId:'P1',location:'server/routes.ts:2869',message:'posts create entry',data:{userId:String(userId||''),hasText:!!String(postText||'').trim(),imageCount:Array.isArray(images)?images.length:-1,videoUrl:String(videoUrl||''),category:String(category||'')},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       console.log('[Posts] Create request received:', { userId, imageCount: images?.length || 0, images });
       if (!userId || !userName || !userRole) {
         return res.status(400).json({ success: false, message: "Missing required fields" });
@@ -3067,6 +3076,19 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
         if (img.startsWith('http')) return img;
         return BACKEND_BASE ? `${BACKEND_BASE}${img}` : img;
       });
+      // #region agent log
+      appendDebugSessionLog({
+        hypothesisId: "P2",
+        location: "server/routes.ts:posts-create",
+        message: "posts cleaned media",
+        data: {
+          cleanImageCount: cleanImages.length,
+          firstImage: String(cleanImages[0] || ""),
+          cleanVideoUrl: String(sanitizeImageUrl(videoUrl || "")),
+        },
+      });
+      fetch('http://127.0.0.1:7396/ingest/e08883fb-7681-4f03-a83e-04cd3d0a3658',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'171936'},body:JSON.stringify({sessionId:'171936',runId:'pre-fix',hypothesisId:'P2',location:'server/routes.ts:2884',message:'posts cleaned media',data:{cleanImageCount:cleanImages.length,firstImage:String(cleanImages[0]||''),cleanVideoUrl:String(sanitizeImageUrl(videoUrl||''))},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       console.log('[Posts] Cleaned images:', { original: images?.length || 0, cleaned: cleanImages.length, urls: cleanImages });
       const cleanVideoUrl = sanitizeImageUrl(videoUrl || "");
       await db.insert(posts).values({
@@ -3102,6 +3124,21 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
       };
 
       notifyNewPost(postText || '', userName, userId).catch(() => {});
+
+      // #region agent log
+      appendDebugSessionLog({
+        hypothesisId: "P1",
+        location: "server/routes.ts:posts-create",
+        message: "posts create success",
+        data: {
+          postId,
+          storedImageCount: cleanImages.length,
+          firstImage: String(cleanImages[0] || ""),
+          storedVideoUrl: cleanVideoUrl,
+        },
+      });
+      fetch('http://127.0.0.1:7396/ingest/e08883fb-7681-4f03-a83e-04cd3d0a3658',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'171936'},body:JSON.stringify({sessionId:'171936',runId:'pre-fix',hypothesisId:'P1',location:'server/routes.ts:2920',message:'posts create success',data:{postId,storedImageCount:cleanImages.length,firstImage:String(cleanImages[0]||''),storedVideoUrl:cleanVideoUrl},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
 
       return res.json({ success: true, post: newPost });
     } catch (error: any) {
@@ -3653,268 +3690,173 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
   });
 
   // ========== Reels ==========
-  app.get("/api/reels", async (_req, res) => {
+  app.get("/api/reels/feed", async (_req, res) => {
     try {
-      const allReels = await db.select().from(reels).orderBy(desc(reels.createdAt));
-      const mappedRaw = allReels
-        .map((r: any) => {
-          const normalizedVideoUrl = normalizePlayableReelVideoUrl(r?.videoUrl);
-          if (!normalizedVideoUrl) return null;
-          return { ...r, videoUrl: normalizedVideoUrl };
-        })
-        .filter((r: any) => !!r)
-        .map((r: any) => {
-        let thumbnailUrl = r.thumbnailUrl || '';
-        // Auto-derive Bunny Stream thumbnail if not stored
-        if (!thumbnailUrl && r.videoUrl) {
-          const cdnMatch = r.videoUrl.match(/b-cdn\.net\/([a-f0-9-]{36})\//);
-          const iframeMatch = r.videoUrl.match(/embed\/\d+\/([a-f0-9-]{36})/);
-          const mediaMatch = r.videoUrl.match(/mediadelivery\.net\/[^/]+\/([a-f0-9-]{36})/);
-          const libFromUrl = r.videoUrl.match(/vz-(\d+)\.b-cdn\.net/)?.[1];
-          const videoId = (cdnMatch?.[1] || iframeMatch?.[1] || mediaMatch?.[1]) ?? '';
-          const lib = libFromUrl || BUNNY_STREAM_LIBRARY_ID || "610561";
-          if (videoId) thumbnailUrl = `https://vz-${lib}.b-cdn.net/${videoId}/thumbnail.jpg`;
-        }
-        return {
-          ...r,
-          thumbnailUrl,
-          likes: (() => { try { return JSON.parse(r.likes || "[]"); } catch { return []; } })(),
-          comments: (() => { try { return JSON.parse(r.comments || "[]"); } catch { return []; } })(),
-        };
-      });
-      const mapped = await Promise.all(mappedRaw.map(async (r: any) => {
-        const ref = getBunnyVideoRefFromUrl(String(r?.videoUrl || ""));
-        if (!ref || !bunnyStreamAvailable) return r;
-        const playable = await isBunnyVideoPlayable(ref.videoId, ref.libraryId);
-        if (!playable) return null;
-        return r;
-      }));
-      return res.json(mapped.filter((r: any) => !!r));
+      const rows = await db.select().from(reels).orderBy(desc(reels.createdAt));
+      return res.json(rows.map(mapReelRecord));
     } catch (error) {
-      console.error("[Reels] List error:", error);
-      return res.status(500).json({ success: false, message: "Failed to list reels" });
+      console.error("[Reels] Feed error:", error);
+      return res.status(500).json({
+        success: false,
+        code: "REELS_FEED_ERROR",
+        message: "Failed to load reels feed.",
+      });
     }
   });
 
-  app.post("/api/reels", async (req, res) => {
+  app.post("/api/reels/create", async (req, res) => {
     try {
-      const {
-        userId,
-        userName,
-        userAvatar,
-        title,
-        description,
-        videoUrl: bodyVideoUrl,
-        thumbnailUrl,
-        videoId: bodyVideoId,
-        caption,
-      } = req.body;
-      const libId = BUNNY_STREAM_LIBRARY_ID || "";
-      let videoUrl = typeof bodyVideoUrl === "string" ? bodyVideoUrl.trim() : "";
-      const vid =
-        typeof bodyVideoId === "string" && /^[a-f0-9-]{36}$/i.test(bodyVideoId.trim())
-          ? bodyVideoId.trim()
-          : "";
-      if (!videoUrl && vid) {
-        if (!libId) {
-          return res.status(503).json({ success: false, message: "Bunny Stream not configured" });
-        }
-        try {
-          const finalMedia = await waitForBunnyPlayableUrl(vid, { libraryId: libId });
-          videoUrl = finalMedia.videoUrl;
-          if (!thumbnailUrl) {
-            req.body.thumbnailUrl = finalMedia.thumbnailUrl;
-          }
-        } catch (error: any) {
-          const msg = String(error?.message || error || "");
-          const statusCode = /encoding failed/i.test(msg)
-            ? 422
-            : /still processing/i.test(msg)
-              ? 409
-              : 502;
-          return res.status(statusCode).json({
-            success: false,
-            message: msg || "Failed to finalize Bunny playback URL",
-          });
-        }
-      }
-      videoUrl = normalizePlayableReelVideoUrl(videoUrl, libId || BUNNY_STREAM_LIBRARY_ID);
+      const { userId, userName, userAvatar, videoId, caption, title, description, thumbnailUrl } = req.body ?? {};
+      const trimmedUserId = String(userId || "").trim();
+      const trimmedVideoId = String(videoId || "").trim();
+      const trimmedCaption = String(caption || description || title || "").trim();
 
-      if (!userId || !videoUrl) {
+      if (!trimmedUserId || !trimmedVideoId) {
         return res.status(400).json({
           success: false,
-          message: "userId and videoUrl (or valid videoId + library) required",
-        });
-      }
-      if (!isPlayableReelVideoUrl(videoUrl)) {
-        return res.status(400).json({
-          success: false,
-          message: "videoUrl must be a final playable .mp4 or .m3u8 URL",
+          code: "REELS_CREATE_INVALID",
+          message: "userId and videoId are required.",
         });
       }
 
-      const bunnyRef = getBunnyVideoRefFromUrl(videoUrl);
-      if (bunnyRef && bunnyStreamAvailable) {
-        try {
-          const status = await fetchBunnyVideoStatus(bunnyRef.videoId, bunnyRef.libraryId);
-          const s = Number(status?.status);
-          if (s === 4) {
-            return res.status(422).json({
-              success: false,
-              message: "Video encoding failed. Please upload the reel again.",
-            });
-          }
-          if (s !== 3) {
-            return res.status(409).json({
-              success: false,
-              message: "Video is still processing. Please try again shortly.",
-            });
-          }
-        } catch (verifyErr: any) {
-          return res.status(502).json({
-            success: false,
-            message: verifyErr?.message || "Failed to verify Bunny video status",
-          });
-        }
+      if (!bunnyStreamAvailable) {
+        return res.status(503).json({
+          success: false,
+          code: "REELS_CREATE_UNAVAILABLE",
+          message: "Bunny Stream is not configured for reels creation.",
+        });
       }
 
-      const cap = typeof caption === "string" ? caption.trim() : "";
-      const resolvedTitle = (typeof title === "string" ? title.trim() : "") || (cap ? cap.slice(0, 100) : "");
-      const resolvedDescription =
-        (typeof description === "string" ? description.trim() : "") || (cap ? cap : "");
+      const [existingReel] = await db
+        .select()
+        .from(reels)
+        .where(eq(reels.videoId, trimmedVideoId))
+        .limit(1);
 
-      const id = randomUUID();
+      if (existingReel) {
+        if (String(existingReel.userId || "").trim() === trimmedUserId) {
+          return res.json({
+            success: true,
+            reel: mapReelRecord(existingReel),
+            deduped: true,
+          });
+        }
+        return res.status(409).json({
+          success: false,
+          code: "REELS_DUPLICATE_VIDEO",
+          message: "This video has already been posted as a reel.",
+        });
+      }
+
+      const bunnyStatus = await fetchBunnyVideoStatus(trimmedVideoId, BUNNY_STREAM_LIBRARY_ID);
+      if (!isBunnyReadyStatus(bunnyStatus?.status, bunnyStatus?.encodeProgress)) {
+        return res.status(400).json({
+          success: false,
+          code: "REELS_VIDEO_PROCESSING",
+          message: "Video is still processing. Wait until it is ready before posting.",
+        });
+      }
+
+      const urls = getBunnyStreamUrls(trimmedVideoId, BUNNY_STREAM_LIBRARY_ID);
       const now = Date.now();
+      const id = randomUUID();
 
       await db.insert(reels).values({
         id,
-        userId,
-        userName: userName || "",
-        userAvatar: userAvatar || "",
-        title: resolvedTitle,
-        description: resolvedDescription,
-        videoUrl,
-        thumbnailUrl: req.body.thumbnailUrl || thumbnailUrl || "",
+        userId: trimmedUserId,
+        userName: String(userName || "").trim(),
+        userAvatar: String(userAvatar || "").trim(),
+        videoId: trimmedVideoId,
+        caption: trimmedCaption,
+        title: trimmedCaption.slice(0, 100),
+        description: trimmedCaption,
+        videoUrl: urls.hlsUrl,
+        thumbnailUrl: String(thumbnailUrl || urls.thumbnailUrl).trim() || urls.thumbnailUrl,
         likes: "[]",
         comments: "[]",
         views: 0,
         createdAt: now,
       });
 
-      const reel = {
-        id, userId, userName: userName || "", userAvatar: userAvatar || "",
-        title: resolvedTitle, description: resolvedDescription, videoUrl,
-        thumbnailUrl: req.body.thumbnailUrl || thumbnailUrl || "", likes: [], comments: [], views: 0,
-        createdAt: now,
-      };
-
-      let reelPushThumb = String(thumbnailUrl || "").trim();
-      if (!reelPushThumb && videoUrl) {
-        const cdnMatch = String(videoUrl).match(/b-cdn\.net\/([a-f0-9-]{36})\//);
-        const iframeMatch = String(videoUrl).match(/embed\/\d+\/([a-f0-9-]{36})/);
-        const mediaMatch = String(videoUrl).match(/mediadelivery\.net\/[^/]+\/([a-f0-9-]{36})/);
-        const pushVideoId = (cdnMatch?.[1] || iframeMatch?.[1] || mediaMatch?.[1]) ?? "";
-        const pushLib = libId || BUNNY_STREAM_LIBRARY_ID || "610561";
-        if (pushVideoId) reelPushThumb = `https://vz-${pushLib}.b-cdn.net/${pushVideoId}/thumbnail.jpg`;
-      }
-
-      // Notify profile "followers" (users who liked this creator's profile — profileLikes on creator)
-      (async () => {
-        try {
-          const [creator] = await db
-            .select({ profileLikes: profiles.profileLikes })
-            .from(profiles)
-            .where(eq(profiles.id, userId))
-            .limit(1);
-          let followerIds: string[] = [];
-          try {
-            const raw = creator?.profileLikes || "[]";
-            const arr = JSON.parse(raw);
-            if (Array.isArray(arr)) {
-              followerIds = arr.map((x: unknown) => String(x || "").trim()).filter((fid) => fid && fid !== userId);
-            }
-          } catch {
-            followerIds = [];
-          }
-          const imgOpt = reelPushThumb.startsWith("https://") ? { imageUrl: reelPushThumb } : {};
-          const data = {
-            type: "new_reel",
-            reelId: id,
-            userId: String(userId),
-            path: "/(tabs)/reels-tab",
-          };
-          if (followerIds.length === 0) {
-            console.log("[Reels] No profile followers to notify for user", userId.slice(0, 8));
-            return;
-          }
-          const out = await sendNotification(
-            "🎬 New Reel",
-            `${userName || "Someone"} posted a new reel${title ? `: ${title}` : ""}`,
-            data,
-            followerIds,
-            imgOpt,
-          );
-          console.log("[Reels] Push to followers:", followerIds.length, "recipients=", out.recipients, "id=", out.id || "-");
-        } catch (e) {
-          console.error("[Reels] Push notification error:", e);
-        }
-      })();
-
-      return res.json({ success: true, reel });
+      const [saved] = await db.select().from(reels).where(eq(reels.id, id)).limit(1);
+      return res.json({
+        success: true,
+        reel: mapReelRecord(saved),
+      });
     } catch (error: any) {
       console.error("[Reels] Create error:", error);
-      const msg = error?.message || String(error);
-      return res.status(500).json({ success: false, message: msg || "Failed to create reel" });
+      return res.status(500).json({
+        success: false,
+        code: "REELS_CREATE_ERROR",
+        message: error?.message || "Failed to create reel.",
+      });
     }
   });
 
-  app.post("/api/reels/:id/view", async (req, res) => {
+  app.post("/api/reels/view/:id", async (req, res) => {
     try {
       const { id } = req.params;
-      const [reel] = await db.select().from(reels).where(eq(reels.id, id));
-      if (!reel) return res.status(404).json({ success: false, message: "Reel not found" });
-      const newViews = (reel.views || 0) + 1;
-      await db.update(reels).set({ views: newViews }).where(eq(reels.id, id));
-      return res.json({ success: true, views: newViews });
-    } catch (error) {
-      console.error("[Reels] View error:", error);
-      return res.status(500).json({ success: false, message: "Failed to increment view count" });
-    }
-  });
-
-  app.post("/api/reels/:id/like", async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { userId } = req.body;
-      if (!userId) return res.status(400).json({ success: false, message: "userId required" });
-
-      const [reel] = await db.select().from(reels).where(eq(reels.id, id));
-      if (!reel) return res.status(404).json({ success: false, message: "Reel not found" });
-
-      const likesList: string[] = JSON.parse(reel.likes || "[]");
-      const idx = likesList.indexOf(userId);
-      if (idx >= 0) likesList.splice(idx, 1);
-      else likesList.push(userId);
-
-      await db.update(reels).set({ likes: JSON.stringify(likesList) }).where(eq(reels.id, id));
-      return res.json({ success: true, likes: likesList });
-    } catch (error) {
-      console.error("[Reels] Like error:", error);
-      return res.status(500).json({ success: false, message: "Failed to like reel" });
-    }
-  });
-
-  app.post("/api/reels/:id/comment", async (req, res) => {
-    try {
-      const { userId, userName, text: commentText } = req.body;
-      if (!userId || !userName || !commentText) {
-        return res.status(400).json({ success: false, message: "userId, userName, text required" });
+      const [reel] = await db.select().from(reels).where(eq(reels.id, id)).limit(1);
+      if (!reel) {
+        return res.status(404).json({ success: false, code: "REELS_NOT_FOUND", message: "Reel not found." });
       }
 
-      const [reel] = await db.select().from(reels).where(eq(reels.id, req.params.id));
-      if (!reel) return res.status(404).json({ success: false, message: "Reel not found" });
+      const nextViews = Number(reel.views || 0) + 1;
+      await db.update(reels).set({ views: nextViews }).where(eq(reels.id, id));
+      return res.json({ success: true, views: nextViews });
+    } catch (error) {
+      console.error("[Reels] View error:", error);
+      return res.status(500).json({ success: false, code: "REELS_VIEW_ERROR", message: "Failed to update views." });
+    }
+  });
 
-      const currentComments = JSON.parse(reel.comments || "[]");
+  app.post("/api/reels/like/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const userId = String(req.body?.userId || "").trim();
+      if (!userId) {
+        return res.status(400).json({ success: false, code: "REELS_LIKE_INVALID", message: "userId is required." });
+      }
+
+      const [reel] = await db.select().from(reels).where(eq(reels.id, id)).limit(1);
+      if (!reel) {
+        return res.status(404).json({ success: false, code: "REELS_NOT_FOUND", message: "Reel not found." });
+      }
+
+      const likesList = parseJsonArray<string>(reel.likes);
+      const nextLikes = likesList.includes(userId)
+        ? likesList.filter((item) => item !== userId)
+        : [...likesList, userId];
+
+      await db.update(reels).set({ likes: JSON.stringify(nextLikes) }).where(eq(reels.id, id));
+      return res.json({ success: true, likes: nextLikes });
+    } catch (error) {
+      console.error("[Reels] Like error:", error);
+      return res.status(500).json({ success: false, code: "REELS_LIKE_ERROR", message: "Failed to update likes." });
+    }
+  });
+
+  app.post("/api/reels/comment/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const userId = String(req.body?.userId || "").trim();
+      const userName = String(req.body?.userName || "").trim();
+      const commentText = String(req.body?.text || "").trim();
+
+      if (!userId || !userName || !commentText) {
+        return res.status(400).json({
+          success: false,
+          code: "REELS_COMMENT_INVALID",
+          message: "userId, userName, and text are required.",
+        });
+      }
+
+      const [reel] = await db.select().from(reels).where(eq(reels.id, id)).limit(1);
+      if (!reel) {
+        return res.status(404).json({ success: false, code: "REELS_NOT_FOUND", message: "Reel not found." });
+      }
+
+      const currentComments = parseJsonArray<any>(reel.comments);
       const newComment = {
         id: randomUUID(),
         userId,
@@ -3922,13 +3864,13 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
         text: commentText,
         createdAt: Date.now(),
       };
-      currentComments.push(newComment);
+      const nextComments = [...currentComments, newComment];
 
-      await db.update(reels).set({ comments: JSON.stringify(currentComments) }).where(eq(reels.id, req.params.id));
-      return res.json({ success: true, comment: newComment, comments: currentComments });
+      await db.update(reels).set({ comments: JSON.stringify(nextComments) }).where(eq(reels.id, id));
+      return res.json({ success: true, comment: newComment, comments: nextComments });
     } catch (error) {
       console.error("[Reels] Comment error:", error);
-      return res.status(500).json({ success: false, message: "Failed to add comment" });
+      return res.status(500).json({ success: false, code: "REELS_COMMENT_ERROR", message: "Failed to add comment." });
     }
   });
 
@@ -3943,8 +3885,8 @@ h2{margin:0 0 8px;font-size:22px;color:#FF6B35}p{color:#aaa;margin:0 0 16px;font
       if (!reel) {
         return res.status(404).json({ success: false, message: "Reel not found" });
       }
-      const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-      const isAdmin = user?.role === "admin";
+      const [userProfile] = await db.select().from(profiles).where(eq(profiles.id, userId)).limit(1);
+      const isAdmin = userProfile?.role === "admin";
       if (reel.userId !== userId && !isAdmin) {
         return res.status(403).json({ success: false, message: "Forbidden" });
       }
@@ -8569,8 +8511,6 @@ Respond ONLY with a valid JSON array (no markdown, no code blocks):
       try { await db.delete(reels); } catch(e) { console.log("reels:", e); }
       try { await db.delete(messages); } catch(e) { console.log("messages:", e); }
       try { await db.delete(conversations); } catch(e) { console.log("conversations:", e); }
-      try { await db.delete(comments); } catch(e) { console.log("comments:", e); }
-      try { await db.delete(likes); } catch(e) { console.log("likes:", e); }
       try { await db.delete(posts); } catch(e) { console.log("posts:", e); }
       try { await db.delete(orders); } catch(e) { console.log("orders:", e); }
       try { await db.delete(products); } catch(e) { console.log("products:", e); }
