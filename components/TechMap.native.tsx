@@ -1,6 +1,6 @@
-import React, { useState, useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, Linking, FlatList } from 'react-native';
-import MapView, { Marker, Callout, Circle, PROVIDER_DEFAULT } from 'react-native-maps';
+import MapView, { Marker, Callout, Circle, PROVIDER_GOOGLE } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import type { TechMapProps } from './TechMap';
 
@@ -13,8 +13,8 @@ const SUCCESS = '#34C759';
 const WARN = '#FF9F0A';
 const BG = '#F5F5F5';
 
-function DistanceBadge({ distance }: { distance: number | null | undefined }) {
-  if (distance == null) return null;
+function DistanceBadge({ distance, reliable }: { distance: number | null | undefined; reliable: boolean }) {
+  if (!reliable || distance == null || !Number.isFinite(distance)) return null;
   const color = distance < 5 ? SUCCESS : distance < 10 ? PRIMARY : WARN;
   return (
     <View style={[styles.distBadge, { borderColor: color }]}>
@@ -30,12 +30,18 @@ function TechCard({
   tech,
   onCall,
   onChat,
+  onProfilePress,
   onPressMap,
+  distanceReliable,
+  defaultSkillLabel,
 }: {
   tech: any;
   onCall: (phone: string) => void;
   onChat?: (tech: any) => void;
+  onProfilePress?: (tech: any) => void;
   onPressMap?: (tech: any) => void;
+  distanceReliable: boolean;
+  defaultSkillLabel: string;
 }) {
   const isAvailable = tech.availableForJobs === 'true';
   const skills: string[] = Array.isArray(tech.skills) ? tech.skills : [];
@@ -54,7 +60,7 @@ function TechCard({
             )}
           </View>
           <Text style={styles.techSkills} numberOfLines={1}>
-            {skills.slice(0, 2).join(' • ') || 'Mobile Technician'}
+            {skills.slice(0, 2).join(' • ') || defaultSkillLabel}
           </Text>
           <View style={styles.techMetaRow}>
             <View style={styles.statusPill}>
@@ -63,7 +69,7 @@ function TechCard({
                 {isAvailable ? 'Available' : 'Busy'}
               </Text>
             </View>
-            <DistanceBadge distance={tech.distance} />
+            <DistanceBadge distance={tech.distance} reliable={distanceReliable} />
           </View>
         </View>
         {onPressMap && tech.latitude && tech.longitude && (
@@ -89,18 +95,35 @@ function TechCard({
             <Text style={styles.callBtnTxt}>Call</Text>
           </Pressable>
         )}
-        {onChat && (
+        {onProfilePress ? (
+          <Pressable style={[styles.actionBtn, styles.chatBtn]} onPress={() => onProfilePress(tech)}>
+            <Ionicons name="person-circle-outline" size={16} color={PRIMARY} />
+            <Text style={styles.chatBtnTxt}>Profile</Text>
+          </Pressable>
+        ) : onChat ? (
           <Pressable style={[styles.actionBtn, styles.chatBtn]} onPress={() => onChat(tech)}>
-            <Ionicons name="chatbubble-ellipses" size={16} color={PRIMARY} />
+            <Ionicons name="chatbubble-outline" size={16} color={PRIMARY} />
             <Text style={styles.chatBtnTxt}>Chat</Text>
           </Pressable>
-        )}
+        ) : null}
       </View>
     </View>
   );
 }
 
-export default function TechMap({ techs, location, loading, errorMsg, bottomInset, onChat, radiusKm = 20 }: TechMapProps) {
+export default function TechMap({
+  techs,
+  location,
+  loading,
+  errorMsg,
+  bottomInset,
+  onChat,
+  onProfilePress,
+  providerRoleLabel = 'Technician',
+  providerRoleLabelPlural = 'Technicians',
+  radiusKm = 20,
+  distanceReliable = false,
+}: TechMapProps) {
   const mapRef = useRef<MapView>(null);
   const [filter, setFilter] = useState<'available' | 'all'>('available');
 
@@ -127,50 +150,72 @@ export default function TechMap({ techs, location, loading, errorMsg, bottomInse
       <MapView
         ref={mapRef}
         style={styles.map}
+        provider={PROVIDER_GOOGLE as any}
         initialRegion={{
           latitude: userLat,
           longitude: userLng,
-          latitudeDelta: radiusKm * 0.018,
-          longitudeDelta: radiusKm * 0.018,
+          latitudeDelta: 0.05,
+          longitudeDelta: 0.05,
         }}
         showsUserLocation={location !== null}
         showsMyLocationButton={location !== null}
+        loadingEnabled={true}
+        onMapReady={() => {
+          console.log("Map Ready");
+        }}
       >
         {techs.map(tech => {
           const lat = parseFloat(tech.latitude);
           const lng = parseFloat(tech.longitude);
           if (!lat || !lng || isNaN(lat) || isNaN(lng)) return null;
           const isAvail = tech.availableForJobs === 'true';
+          const displayName = (typeof tech.name === 'string' && tech.name.trim()) ? tech.name.trim() : providerRoleLabel;
           return (
             <Marker
               key={tech.id}
               coordinate={{ latitude: lat, longitude: lng }}
+              title={displayName}
+              description={isAvail ? 'Available' : 'Busy'}
               pinColor={isAvail ? SUCCESS : MUTED}
+              tracksViewChanges={false}
             >
               <Callout tooltip>
                 <View style={styles.callout}>
                   <Text style={styles.calloutName}>{tech.name}</Text>
                   <Text style={styles.calloutSkills} numberOfLines={1}>
-                    {(Array.isArray(tech.skills) ? tech.skills[0] : null) || 'Technician'}
+                    {(Array.isArray(tech.skills) ? tech.skills[0] : null) || providerRoleLabel}
                   </Text>
                   <View style={styles.calloutMeta}>
                     <View style={[styles.calloutDot, { backgroundColor: isAvail ? SUCCESS : MUTED }]} />
                     <Text style={[styles.calloutStatus, { color: isAvail ? SUCCESS : MUTED }]}>
                       {isAvail ? 'Available' : 'Busy'}
                     </Text>
-                    {tech.distance != null && (
+                    {distanceReliable && tech.distance != null && Number.isFinite(tech.distance) && (
                       <Text style={styles.calloutDist}>  •  {tech.distance.toFixed(1)} km</Text>
                     )}
                   </View>
                   {tech.verified === 1 && (
                     <Text style={styles.calloutVerified}>✓ Verified Technician</Text>
                   )}
-                  {tech.phone && (
-                    <Pressable style={styles.calloutCallBtn} onPress={() => handleCall(tech.phone)}>
-                      <Ionicons name="call" size={14} color="#FFF" />
-                      <Text style={styles.calloutCallTxt}>Call Now</Text>
-                    </Pressable>
-                  )}
+                  <View style={styles.calloutActions}>
+                    {onProfilePress ? (
+                      <Pressable style={styles.calloutProfileBtn} onPress={() => onProfilePress(tech)}>
+                        <Ionicons name="person-circle-outline" size={14} color={PRIMARY} />
+                        <Text style={styles.calloutProfileTxt}>Profile</Text>
+                      </Pressable>
+                    ) : onChat ? (
+                      <Pressable style={styles.calloutProfileBtn} onPress={() => onChat(tech)}>
+                        <Ionicons name="chatbubble-outline" size={14} color={PRIMARY} />
+                        <Text style={styles.calloutProfileTxt}>Chat</Text>
+                      </Pressable>
+                    ) : null}
+                    {tech.phone && (
+                      <Pressable style={styles.calloutCallBtn} onPress={() => handleCall(tech.phone)}>
+                        <Ionicons name="call" size={14} color="#FFF" />
+                        <Text style={styles.calloutCallTxt}>Call</Text>
+                      </Pressable>
+                    )}
+                  </View>
                 </View>
               </Callout>
             </Marker>
@@ -191,7 +236,7 @@ export default function TechMap({ techs, location, loading, errorMsg, bottomInse
         <View style={styles.sheetHeader}>
           <View>
             <Text style={styles.sheetTitle}>
-              {availableTechs.length} {availableTechs.length === 1 ? 'technician' : 'technicians'} available
+              {availableTechs.length} {providerRoleLabelPlural.toLowerCase()} available
             </Text>
             <Text style={styles.sheetSub}>Within {radiusKm} km • Updates every 30s</Text>
           </View>
@@ -225,7 +270,7 @@ export default function TechMap({ techs, location, loading, errorMsg, bottomInse
           <View style={styles.emptyBox}>
             <Ionicons name="people-outline" size={36} color={MUTED} />
             <Text style={styles.emptyTxt}>
-              {filter === 'available' ? 'No available techs right now' : `No technicians within ${radiusKm} km`}
+              {filter === 'available' ? `No available ${providerRoleLabelPlural.toLowerCase()} right now` : `No ${providerRoleLabelPlural.toLowerCase()} within ${radiusKm} km`}
             </Text>
           </View>
         ) : (
@@ -239,8 +284,11 @@ export default function TechMap({ techs, location, loading, errorMsg, bottomInse
                 key={tech.id}
                 tech={tech}
                 onCall={handleCall}
-                onChat={onChat}
+                onProfilePress={onProfilePress}
+                onChat={onProfilePress ? undefined : onChat}
                 onPressMap={centerOnTech}
+                distanceReliable={distanceReliable}
+                defaultSkillLabel={providerRoleLabel}
               />
             ))}
           </ScrollView>
@@ -266,7 +314,16 @@ const styles = StyleSheet.create({
   calloutStatus: { fontSize: 12, fontFamily: 'Inter_600SemiBold' },
   calloutDist: { fontSize: 12, fontFamily: 'Inter_400Regular', color: MUTED },
   calloutVerified: { fontSize: 11, fontFamily: 'Inter_600SemiBold', color: SUCCESS, marginBottom: 8 },
+  calloutActions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+  calloutProfileBtn: {
+    flex: 1,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5,
+    backgroundColor: '#FFF1EC', borderRadius: 8, paddingVertical: 7,
+    borderWidth: 1, borderColor: PRIMARY,
+  },
+  calloutProfileTxt: { color: PRIMARY, fontSize: 12, fontFamily: 'Inter_700Bold' },
   calloutCallBtn: {
+    flex: 1,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5,
     backgroundColor: PRIMARY, borderRadius: 8, paddingVertical: 7,
   },

@@ -26,10 +26,12 @@ function DistanceBadge({ distance }: { distance: number | null | undefined }) {
 function TechCard({
   tech,
   onCall,
+  onProfilePress,
   onChat,
 }: {
   tech: any;
   onCall: (phone: string) => void;
+  onProfilePress?: (tech: any) => void;
   onChat?: (tech: any) => void;
 }) {
   const isAvailable = tech.availableForJobs === 'true';
@@ -79,12 +81,17 @@ function TechCard({
             <Text style={styles.callBtnTxt}>Call</Text>
           </Pressable>
         )}
-        {onChat && (
+        {onProfilePress ? (
+          <Pressable style={[styles.actionBtn, styles.chatBtn]} onPress={() => onProfilePress(tech)}>
+            <Ionicons name="person-circle-outline" size={16} color={PRIMARY} />
+            <Text style={styles.chatBtnTxt}>Profile</Text>
+          </Pressable>
+        ) : onChat ? (
           <Pressable style={[styles.actionBtn, styles.chatBtn]} onPress={() => onChat(tech)}>
-            <Ionicons name="chatbubble-ellipses" size={16} color={PRIMARY} />
+            <Ionicons name="chatbubble-outline" size={16} color={PRIMARY} />
             <Text style={styles.chatBtnTxt}>Chat</Text>
           </Pressable>
-        )}
+        ) : null}
       </View>
     </View>
   );
@@ -120,6 +127,7 @@ export default function TechMap({
   errorMsg,
   bottomInset,
   onChat,
+  onProfilePress,
   radiusKm = 20,
 }: TechMapProps) {
   const [filter, setFilter] = useState<'all' | 'available'>('available');
@@ -205,7 +213,13 @@ export default function TechMap({
       )}
 
       {displayed.map((tech) => (
-        <TechCard key={tech.id} tech={tech} onCall={handleCall} onChat={onChat} />
+        <TechCard
+          key={tech.id}
+          tech={tech}
+          onCall={handleCall}
+          onProfilePress={onProfilePress}
+          onChat={onProfilePress ? undefined : onChat}
+        />
       ))}
     </ScrollView>
   );

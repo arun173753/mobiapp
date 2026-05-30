@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, Pressable, ActivityIndicator, Platform, Linking } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ActivityIndicator, Platform, Linking, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import * as Location from 'expo-location';
 import { apiRequest } from '@/lib/query-client';
 import { useApp } from '@/lib/context';
+import { ROLE_LABELS, UserRole } from '@/lib/types';
+import { normalizeRole } from '@/lib/map-helpers';
 import TechMap from '@/components/TechMap';
 
 const PRIMARY = '#FF6B2C';
@@ -18,27 +20,50 @@ const SUCCESS = '#34C759';
 
 const RADIUS_KM = 20;
 const POLL_INTERVAL_MS = 30000;
+const LOCATION_TIMEOUT_MS = 15000;
+const PRECISE_ACCURACY_METERS = 100;
+const FALLBACK_LOCATION = { latitude: 17.3850, longitude: 78.4867 };
+
+function isPreciseLocation(loc: Location.LocationObject | null) {
+  const accuracy = loc?.coords?.accuracy;
+  return typeof accuracy === 'number' && Number.isFinite(accuracy) && accuracy <= PRECISE_ACCURACY_METERS;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error('Location timeout')), timeoutMs)),
+  ]);
+}
 
 export default function TechnicianMapScreen() {
   const insets = useSafeAreaInsets();
-  const { profile, startConversation } = useApp();
+  const { profile } = useApp();
+  const { role: roleParam } = useLocalSearchParams<{ role?: string }>();
+  const providerRole = normalizeRole(roleParam || 'technician') || 'technician';
+  const roleLabel = ROLE_LABELS[providerRole as UserRole] || 'Technician';
+  const roleLabelPlural = `${roleLabel}s`;
   const [customerLocation, setCustomerLocation] = useState<Location.LocationObject | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [locationDenied, setLocationDenied] = useState(false);
   const [techs, setTechs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  const [distanceReliable, setDistanceReliable] = useState(false);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const locationSubRef = useRef<Location.LocationSubscription | null>(null);
-  const latRef = useRef<number>(17.3850);
-  const lngRef = useRef<number>(78.4867);
+  const latRef = useRef<number>(FALLBACK_LOCATION.latitude);
+  const lngRef = useRef<number>(FALLBACK_LOCATION.longitude);
 
   const topInset = Platform.OS === 'web' ? 67 : insets.top;
   const botInset = Platform.OS === 'web' ? 34 : insets.bottom;
 
   const fetchNearbyTechs = useCallback(async (lat: number, lng: number) => {
     try {
-      const res = await apiRequest('GET', `/api/technicians/nearby?lat=${lat}&lng=${lng}&radius=${RADIUS_KM}`);
+      const res = await apiRequest(
+        'GET',
+        `/api/providers/nearby?lat=${lat}&lng=${lng}&radius=${RADIUS_KM}&role=${encodeURIComponent(providerRole)}`,
+      );
       const data = await res.json();
       setTechs(Array.isArray(data) ? data : (data.technicians ?? []));
       setLastRefreshed(new Date());
@@ -47,7 +72,7 @@ export default function TechnicianMapScreen() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [providerRole]);
 
   useEffect(() => {
     let mounted = true;
@@ -62,64 +87,97 @@ export default function TechnicianMapScreen() {
                 if (!mounted) return;
                 const lat = pos.coords.latitude;
                 const lng = pos.coords.longitude;
+                const precise = typeof pos.coords.accuracy === 'number' && pos.coords.accuracy <= PRECISE_ACCURACY_METERS;
                 latRef.current = lat;
                 lngRef.current = lng;
                 setCustomerLocation({ coords: { latitude: lat, longitude: lng, altitude: null, accuracy: pos.coords.accuracy, altitudeAccuracy: null, heading: null, speed: null }, timestamp: pos.timestamp } as any);
+                setDistanceReliable(precise);
+                setErrorMsg(precise ? null : 'Location is approximate. Enable precise location for correct distance.');
                 fetchNearbyTechs(lat, lng);
               },
               () => {
                 if (!mounted) return;
-                setErrorMsg('Location access denied. Showing technicians near Hyderabad.');
+                setErrorMsg('Location access denied. Showing nearby providers near Hyderabad.');
                 setLocationDenied(true);
-                fetchNearbyTechs(17.3850, 78.4867);
+                setDistanceReliable(false);
+                fetchNearbyTechs(FALLBACK_LOCATION.latitude, FALLBACK_LOCATION.longitude);
               },
-              { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
+              { enableHighAccuracy: true, timeout: LOCATION_TIMEOUT_MS, maximumAge: 0 }
             );
           } else {
-            setErrorMsg('Location not available. Showing technicians near Hyderabad.');
-            fetchNearbyTechs(17.3850, 78.4867);
+            setErrorMsg('Could not read GPS. Showing nearby providers near Hyderabad.');
+            setDistanceReliable(false);
+            fetchNearbyTechs(FALLBACK_LOCATION.latitude, FALLBACK_LOCATION.longitude);
           }
           return;
         }
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') {
-          setErrorMsg('Location permission denied. Showing technicians near Hyderabad.');
+          setErrorMsg('Location permission denied. Showing nearby providers near Hyderabad.');
           setLocationDenied(true);
-          fetchNearbyTechs(17.3850, 78.4867);
+          setDistanceReliable(false);
+          fetchNearbyTechs(FALLBACK_LOCATION.latitude, FALLBACK_LOCATION.longitude);
           return;
         }
 
-        const locationPromise = Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Location timeout')), 8000));
+        if (Platform.OS === 'android') {
+          try {
+            await Location.enableNetworkProviderAsync();
+          } catch {
+            setErrorMsg('Turn on GPS / High accuracy location for correct technician distance.');
+          }
+        }
 
         let loc;
         try {
-          loc = await Promise.race([locationPromise, timeoutPromise]) as Location.LocationObject;
+          loc = await withTimeout(
+            Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.BestForNavigation,
+              mayShowUserSettingsDialog: true,
+            } as Location.LocationOptions),
+            LOCATION_TIMEOUT_MS,
+          );
         } catch (e) {
-          console.warn('[TechMap] Location fetch timed out or failed, using default');
+          console.warn('[TechMap] High accuracy location timed out or failed:', e);
           loc = null;
         }
 
         if (!mounted) return;
 
         if (loc) {
+          const precise = isPreciseLocation(loc);
           setCustomerLocation(loc);
+          setDistanceReliable(precise);
+          setLocationDenied(false);
+          setErrorMsg(precise ? null : 'Approximate location detected. Select “Precise” in Android location permission for correct distance.');
           latRef.current = loc.coords.latitude;
           lngRef.current = loc.coords.longitude;
           fetchNearbyTechs(loc.coords.latitude, loc.coords.longitude);
         } else {
-          setErrorMsg('Could not get precise location. Showing nearby technicians.');
-          fetchNearbyTechs(17.3850, 78.4867);
+          setDistanceReliable(false);
+          setErrorMsg('Could not get GPS location after 15 seconds. Showing nearby providers near Hyderabad.');
+          fetchNearbyTechs(FALLBACK_LOCATION.latitude, FALLBACK_LOCATION.longitude);
         }
 
         try {
           locationSubRef.current = await Location.watchPositionAsync(
-            { accuracy: Location.Accuracy.Balanced, distanceInterval: 100, timeInterval: 15000 },
+            {
+              accuracy: Location.Accuracy.BestForNavigation,
+              distanceInterval: 10,
+              timeInterval: 5000,
+              mayShowUserSettingsDialog: true,
+            } as Location.LocationOptions,
             (pos) => {
               if (!mounted) return;
+              const precise = isPreciseLocation(pos);
               setCustomerLocation(pos);
+              setDistanceReliable(precise);
+              setErrorMsg(precise ? null : 'Approximate location detected. Select “Precise” in Android location permission for correct distance.');
               latRef.current = pos.coords.latitude;
               lngRef.current = pos.coords.longitude;
+              if (precise) {
+                fetchNearbyTechs(pos.coords.latitude, pos.coords.longitude);
+              }
             }
           );
         } catch (watchErr) {
@@ -127,8 +185,9 @@ export default function TechnicianMapScreen() {
         }
       } catch (e) {
         if (!mounted) return;
-        setErrorMsg('Could not get location. Showing nearby technicians.');
-        fetchNearbyTechs(17.3850, 78.4867);
+        setDistanceReliable(false);
+        setErrorMsg('Could not get GPS location. Showing nearby providers near Hyderabad.');
+        fetchNearbyTechs(FALLBACK_LOCATION.latitude, FALLBACK_LOCATION.longitude);
       }
     };
 
@@ -145,25 +204,19 @@ export default function TechnicianMapScreen() {
     };
   }, [fetchNearbyTechs]);
 
-  const handleChat = useCallback(async (tech: any) => {
+  const handleOpenTechProfile = useCallback((tech: any) => {
     if (!profile) {
       router.push('/onboarding' as any);
       return;
     }
-    try {
-      const convoId = await startConversation(tech.id, tech.name, tech.role ?? 'technician');
-      router.push(`/chat/${convoId}` as any);
-    } catch (e) {
-      console.error('[TechMap] chat error:', e);
-    }
-  }, [profile, startConversation]);
+    if (!tech?.id) return;
+    router.push({ pathname: '/user-profile', params: { id: String(tech.id) } });
+  }, [profile]);
 
   const handleRefresh = useCallback(() => {
     setLoading(true);
     fetchNearbyTechs(latRef.current, lngRef.current);
   }, [fetchNearbyTechs]);
-
-  const availableCount = techs.filter(t => t.availableForJobs === 'true').length;
 
   return (
     <View style={[styles.container, { paddingTop: topInset }]}>
@@ -172,10 +225,10 @@ export default function TechnicianMapScreen() {
           <Ionicons name="chevron-back" size={24} color={FORE} />
         </Pressable>
         <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle}>Nearby Technicians</Text>
+          <Text style={styles.headerTitle}>Nearby {roleLabelPlural}</Text>
           {lastRefreshed && (
             <Text style={styles.headerSub}>
-              {availableCount} available within {RADIUS_KM} km
+              {techs.length} within {RADIUS_KM} km
             </Text>
           )}
         </View>
@@ -213,7 +266,7 @@ export default function TechnicianMapScreen() {
       {loading && techs.length === 0 ? (
         <View style={styles.loadingBox}>
           <ActivityIndicator size="large" color={PRIMARY} />
-          <Text style={styles.loadingTxt}>Finding technicians near you...</Text>
+          <Text style={styles.loadingTxt}>Finding {roleLabelPlural.toLowerCase()} near you...</Text>
           <Text style={styles.loadingSubTxt}>Searching within {RADIUS_KM} km radius</Text>
         </View>
       ) : (
@@ -222,8 +275,11 @@ export default function TechnicianMapScreen() {
           location={customerLocation}
           loading={loading}
           errorMsg={locationDenied ? null : errorMsg}
+          distanceReliable={distanceReliable}
           bottomInset={botInset}
-          onChat={handleChat}
+          onProfilePress={handleOpenTechProfile}
+          providerRoleLabel={roleLabel}
+          providerRoleLabelPlural={roleLabelPlural}
           radiusKm={RADIUS_KM}
         />
       )}

@@ -1,8 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, Linking, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import Constants from 'expo-constants';
 import MapView, { Marker, PROVIDER_DEFAULT, PROVIDER_GOOGLE, Region } from 'react-native-maps';
+import { isAndroidMapsKeyMissing } from '@/lib/maps-api-key';
 
 const PRIMARY = '#FF6B2C';
 const CARD = '#FFFFFF';
@@ -19,11 +19,15 @@ export type TechMapProps = {
   errorMsg: string | null;
   bottomInset: number;
   onChat?: (tech: any) => void;
+  onProfilePress?: (tech: any) => void;
+  providerRoleLabel?: string;
+  providerRoleLabelPlural?: string;
   radiusKm?: number;
+  distanceReliable?: boolean;
 };
 
-function DistanceBadge({ distance }: { distance: number | null | undefined }) {
-  if (distance == null) return null;
+function DistanceBadge({ distance, reliable }: { distance: number | null | undefined; reliable: boolean }) {
+  if (!reliable || distance == null || !Number.isFinite(distance)) return null;
   const color = distance < 5 ? SUCCESS : distance < 10 ? PRIMARY : WARN;
   return (
     <View style={[styles.distBadge, { borderColor: color }]}>
@@ -38,11 +42,15 @@ function DistanceBadge({ distance }: { distance: number | null | undefined }) {
 function TechCard({
   tech,
   onCall,
+  onProfilePress,
   onChat,
+  distanceReliable,
 }: {
   tech: any;
   onCall: (phone: string) => void;
+  onProfilePress?: (tech: any) => void;
   onChat?: (tech: any) => void;
+  distanceReliable: boolean;
 }) {
   const isAvailable = tech.availableForJobs === 'true';
   const skills: string[] = Array.isArray(tech.skills) ? tech.skills : [];
@@ -70,7 +78,7 @@ function TechCard({
                 {isAvailable ? 'Available' : 'Busy'}
               </Text>
             </View>
-            <DistanceBadge distance={tech.distance} />
+            <DistanceBadge distance={tech.distance} reliable={distanceReliable} />
           </View>
         </View>
       </View>
@@ -91,12 +99,17 @@ function TechCard({
             <Text style={styles.callBtnTxt}>Call</Text>
           </Pressable>
         )}
-        {onChat && (
+        {onProfilePress ? (
+          <Pressable style={[styles.actionBtn, styles.chatBtn]} onPress={() => onProfilePress(tech)}>
+            <Ionicons name="person-circle-outline" size={16} color={PRIMARY} />
+            <Text style={styles.chatBtnTxt}>Profile</Text>
+          </Pressable>
+        ) : onChat ? (
           <Pressable style={[styles.actionBtn, styles.chatBtn]} onPress={() => onChat(tech)}>
-            <Ionicons name="chatbubble-ellipses" size={16} color={PRIMARY} />
+            <Ionicons name="chatbubble-outline" size={16} color={PRIMARY} />
             <Text style={styles.chatBtnTxt}>Chat</Text>
           </Pressable>
-        )}
+        ) : null}
       </View>
     </View>
   );
@@ -143,11 +156,7 @@ function NativeMap({
   location: { coords: { latitude: number; longitude: number } } | null;
   radiusKm: number;
 }) {
-  const mapsKey = useMemo(() => {
-    const k = (Constants.expoConfig?.android?.config as any)?.googleMaps?.apiKey || '';
-    return String(k || '');
-  }, []);
-  const likelyMissingKey = mapsKey.includes('YOUR_GOOGLE_MAPS_API_KEY_HERE') || !mapsKey.trim();
+  const likelyMissingKey = isAndroidMapsKeyMissing();
 
   const lat = location?.coords.latitude ?? 17.3850;
   const lng = location?.coords.longitude ?? 78.4867;
@@ -165,7 +174,7 @@ function NativeMap({
       <MapView
         style={styles.nativeMap}
         provider={(
-          Constants.platform?.android && !likelyMissingKey
+          Platform.OS === 'android' && !likelyMissingKey
             ? PROVIDER_GOOGLE
             : PROVIDER_DEFAULT
         ) as any}
@@ -181,12 +190,13 @@ function NativeMap({
           const lg = Number(t.longitude);
           if (!Number.isFinite(lt) || !Number.isFinite(lg)) return null;
           const isAvailable = t.availableForJobs === 'true';
+          const nm = (typeof t.name === 'string' && t.name.trim()) ? t.name.trim() : 'Technician';
           return (
             <Marker
               key={t.id}
               coordinate={{ latitude: lt, longitude: lg }}
-              title={t.name || 'Technician'}
-              description={t.city || ''}
+              title={nm}
+              description={[t.city, t.state].filter(Boolean).join(', ') || (isAvailable ? 'Available' : 'Busy')}
               pinColor={isAvailable ? SUCCESS : MUTED}
               tracksViewChanges={false}
             />
@@ -216,7 +226,11 @@ export default function TechMap({
   errorMsg,
   bottomInset,
   onChat,
+  onProfilePress,
+  providerRoleLabel = 'Technician',
+  providerRoleLabelPlural = 'Technicians',
   radiusKm = 20,
+  distanceReliable = false,
 }: TechMapProps) {
   const [filter, setFilter] = useState<'all' | 'available'>('available');
 
@@ -289,23 +303,30 @@ export default function TechMap({
         <View style={styles.emptyBox}>
           <Ionicons name="people-outline" size={56} color={MUTED} />
           <Text style={styles.emptyTitle}>
-            {filter === 'available' ? 'No available technicians' : 'No technicians found'}
+            {filter === 'available' ? 'No available providers' : `No ${providerRoleLabelPlural.toLowerCase()} found`}
           </Text>
           <Text style={styles.emptyTxt}>
             {filter === 'available'
-              ? 'All technicians are busy. Try again soon.'
-              : `No technicians within ${radiusKm} km`}
+              ? 'All providers are busy. Try again soon.'
+              : `No ${providerRoleLabelPlural.toLowerCase()} within ${radiusKm} km`}
           </Text>
           {filter === 'available' && techs.length > 0 && (
             <Pressable style={styles.showAllBtn} onPress={() => setFilter('all')}>
-              <Text style={styles.showAllTxt}>Show all {techs.length} technicians</Text>
+              <Text style={styles.showAllTxt}>Show all {techs.length} {providerRoleLabelPlural.toLowerCase()}</Text>
             </Pressable>
           )}
         </View>
       )}
 
       {displayed.map(tech => (
-        <TechCard key={tech.id} tech={tech} onCall={handleCall} onChat={onChat} />
+        <TechCard
+          key={tech.id}
+          tech={tech}
+          onCall={handleCall}
+          onProfilePress={onProfilePress}
+          onChat={onProfilePress ? undefined : onChat}
+          distanceReliable={distanceReliable}
+        />
       ))}
     </ScrollView>
   );
