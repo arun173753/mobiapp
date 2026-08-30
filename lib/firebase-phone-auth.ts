@@ -1,5 +1,8 @@
 import { Platform, Alert } from 'react-native';
-import { apiRequest, getApiUrl } from './query-client';
+import { normalizeIndianMobileDigits } from '@shared/phone-normalize';
+import { apiRequest } from './query-client';
+import { API_URL } from './api-config';
+import { robustFetch } from './api-client';
 
 let currentSessionToken: string | null = null;
 
@@ -12,8 +15,8 @@ export async function sendFirebaseOTP(phone: string): Promise<{ success: boolean
   try {
     // Use backend OTP system that works reliably
     // Backend stores OTP and returns it in dev mode for testing
-    const digits = phone.replace(/\D/g, '').slice(-10);
-    if (!digits || digits.length !== 10) {
+    const digits = normalizeIndianMobileDigits(phone);
+    if (!digits) {
       return { success: false, error: 'Invalid phone number' };
     }
 
@@ -52,8 +55,12 @@ export type PhoneVerifyResult = {
  */
 export async function verifyFirebaseOTP(phone: string, code: string): Promise<PhoneVerifyResult> {
   try {
+    const national = normalizeIndianMobileDigits(phone);
+    if (!national) {
+      return { success: false, error: 'Invalid phone number', verified: false };
+    }
     console.log('[Firebase OTP] Verifying code (backend session):', code);
-    const result = await verifyFallbackOTP(phone, code);
+    const result = await verifyFallbackOTP(national, code);
 
     if (!result.success) {
       return { success: false, error: result.error || 'Invalid OTP', verified: false };
@@ -65,11 +72,17 @@ export async function verifyFirebaseOTP(phone: string, code: string): Promise<Ph
       return { success: false, error: 'Invalid server response', verified: false };
     }
 
-    console.log('[Firebase OTP] OTP verified; has sessionToken:', !!(data as any).sessionToken);
+    const sessionToken = String((data as any).sessionToken || '').trim();
+    if (!sessionToken) {
+      console.error('[Firebase OTP] Verify payload missing sessionToken');
+      return { success: false, error: 'Invalid server response', verified: false };
+    }
+
+    console.log('[Firebase OTP] OTP verified; has sessionToken:', true);
     return {
       success: true,
       verified: true,
-      sessionToken: String((data as any).sessionToken || ''),
+      sessionToken,
       profile: (data as any).profile,
       isNewUser: (data as any).isNewUser as boolean | undefined,
     };
@@ -79,13 +92,19 @@ export async function verifyFirebaseOTP(phone: string, code: string): Promise<Ph
   }
 }
 
-export async function sendFallbackOTP(phone: string): Promise<{ success: boolean; otp?: string; smsSent?: boolean; error?: string }> {
+export async function sendFallbackOTP(
+  phone: string,
+  options?: { forceResend?: boolean },
+): Promise<{ success: boolean; otp?: string; smsSent?: boolean; error?: string }> {
   try {
-    const res = await apiRequest('POST', '/api/otp/send', { phone });
+    const res = await apiRequest('POST', '/api/otp/send', {
+      phone,
+      forceResend: options?.forceResend === true,
+    });
     const data = await res.json();
     
-    if (data.success) {
-      console.log('[Fallback OTP] Generated. smsSent:', data.smsSent);
+    if (data.success && (data.sent || data.smsSent || data.alreadySent)) {
+      console.log('[Fallback OTP] Delivered. smsSent:', data.smsSent, 'alreadySent:', data.alreadySent);
       return { success: true, otp: data.otp, smsSent: data.smsSent };
     }
     
@@ -97,21 +116,28 @@ export async function sendFallbackOTP(phone: string): Promise<{ success: boolean
 
 export async function verifyFallbackOTP(phone: string, code: string): Promise<any> {
   try {
+    const national = normalizeIndianMobileDigits(phone);
+    if (!national) {
+      return { success: false, error: 'Invalid phone number' };
+    }
+    const otpDigits = String(code || '').replace(/\D/g, '').slice(0, 6);
     const deviceId = await (await import('./device-fingerprint')).getDeviceId();
-    const baseUrl = getApiUrl();
-    const res = await fetch(new URL('/api/otp/verify', baseUrl).toString(), {
+    const url = new URL('/api/otp/verify', API_URL).toString();
+    const res = await robustFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone, otp: code, deviceId }),
+      body: JSON.stringify({ phone: national, otp: otpDigits, deviceId }),
+      timeoutMs: 90_000,
     });
     const data = (await res.json().catch(() => ({}))) as any;
-    
-    if (data.success) {
+
+    if (res.ok && data && data.success === true && typeof data.sessionToken === 'string' && data.sessionToken.trim() !== '') {
       console.log('[Fallback OTP] Verified successfully');
       return { success: true, data };
     }
-    
-    return { success: false, error: data.message || 'Invalid OTP' };
+
+    const msg = data?.message || (res.ok ? 'Verification failed' : `Request failed (${res.status})`);
+    return { success: false, error: typeof msg === 'string' ? msg : 'Invalid OTP' };
   } catch (e: any) {
     return { success: false, error: e?.message || 'Network error' };
   }

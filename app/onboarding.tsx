@@ -20,12 +20,22 @@ import Colors from '@/constants/colors';
 import { useApp } from '@/lib/context';
 import {
   UserRole, ROLE_LABELS, SKILLS_LIST, INDIAN_STATES, UserProfile,
-  SUPPLIER_SELL_TYPES, TEACHER_TEACH_TYPES, SHOPKEEPER_SELL_TYPES,
+  SUPPLIER_SELL_TYPES, TEACHER_TEACH_TYPES, SHOPKEEPER_SELL_TYPES, isHospitalityOwnerRole,
 } from '@/lib/types';
+import { createVenueProfile, addMenuItem, addHotelRoom } from '@/lib/hospitality-api';
 import { apiRequest, getApiUrl } from '@/lib/query-client';
 import { getDeviceId } from '@/lib/device-fingerprint';
+import { normalizeIndianMobileDigits } from '@shared/phone-normalize';
 
 const C = Colors.light;
+
+function sanitizePhoneInput(raw: string): string {
+  return String(raw || '').replace(/\D/g, '').slice(0, 10);
+}
+
+function isValidIndianMobileInput(raw: string): boolean {
+  return normalizeIndianMobileDigits(raw) !== null;
+}
 
 const SUPER_ADMIN_PHONE = '8179142535';
 const SUPER_ADMIN_EMAIL = 'atozmobilerepaircourse@gmail.com';
@@ -41,18 +51,48 @@ function getRoleRoute(profile: { role?: string; phone?: string; email?: string }
   if (email === SUPER_ADMIN_EMAIL) return '/admin';
   if (profile.role === 'admin') return '/admin';
   if (profile.role === 'customer') return '/(tabs)/customer-home';
+  if (isHospitalityOwnerRole(profile.role)) return '/(tabs)/my-venue';
   return '/(tabs)';
 }
 
-const ROLES: { key: UserRole; label: string; icon: keyof typeof Ionicons.glyphMap; color: string; bg: string }[] = [
+type RoleCard = { key: UserRole; label: string; icon: keyof typeof Ionicons.glyphMap; color: string; bg: string };
+
+const ROLES: RoleCard[] = [
   { key: 'customer', label: 'Customer', icon: 'person', color: '#EF4444', bg: '#FEF2F2' },
   { key: 'technician', label: 'Technician', icon: 'construct', color: '#22C55E', bg: '#F0FDF4' },
   { key: 'teacher', label: 'Teacher', icon: 'school', color: '#F59E0B', bg: '#FFFBEB' },
   { key: 'supplier', label: 'Supplier', icon: 'cube', color: '#3B82F6', bg: '#EFF6FF' },
   { key: 'shopkeeper', label: 'Shopkeeper', icon: 'storefront', color: '#8B5CF6', bg: '#F5F3FF' },
+  { key: 'hotel_owner', label: 'Hotel Owner', icon: 'bed', color: '#6B46C1', bg: '#F3EEFF' },
+  { key: 'restaurant_owner', label: 'Restaurant Owner', icon: 'restaurant', color: '#EC4899', bg: '#FDF2F8' },
 ];
 
-type Screen = 'welcome' | 'phone' | 'otp' | 'google-phone' | 'details' | 'selfie' | 'skills' | 'sellType' | 'teachType' | 'businessDocs' | 'location';
+/**
+ * Additional "I provide a service" roles. All instant-join, no admin approval.
+ */
+const PROVIDER_EXTRA_ROLES: RoleCard[] = [
+  { key: 'doctor', label: 'Doctor', icon: 'medkit', color: '#EF4444', bg: '#FEF2F2' },
+  { key: 'lawyer', label: 'Lawyer', icon: 'briefcase', color: '#64748B', bg: '#F8FAFC' },
+  { key: 'software_developer', label: 'Software Dev', icon: 'code-slash', color: '#6366F1', bg: '#EEF2FF' },
+  { key: 'digital_marketer', label: 'Digital Marketer', icon: 'megaphone', color: '#EC4899', bg: '#FDF2F8' },
+  { key: 'driver', label: 'Driver', icon: 'car', color: '#0EA5E9', bg: '#F0F9FF' },
+  { key: 'delivery_partner', label: 'Delivery Partner', icon: 'cube', color: '#14B8A6', bg: '#F0FDFA' },
+  { key: 'freelancer', label: 'Freelancer', icon: 'brush', color: '#A855F7', bg: '#FAF5FF' },
+  { key: 'service_provider', label: 'Service Provider', icon: 'briefcase', color: '#FF6B2C', bg: '#FFF7ED' },
+  { key: 'labour', label: 'Labour', icon: 'barbell', color: '#854D0E', bg: '#FEF7E0' },
+  { key: 'cleaner', label: 'Cleaner', icon: 'sparkles', color: '#22D3EE', bg: '#ECFEFF' },
+  { key: 'mechanic', label: 'Mechanic', icon: 'cog', color: '#475569', bg: '#F1F5F9' },
+  { key: 'electrician', label: 'Electrician', icon: 'flash', color: '#EAB308', bg: '#FEFCE8' },
+  { key: 'plumber', label: 'Plumber', icon: 'water', color: '#0284C7', bg: '#E0F2FE' },
+  { key: 'carpenter', label: 'Carpenter', icon: 'hammer', color: '#92400E', bg: '#FFFBEB' },
+  { key: 'painter', label: 'Painter', icon: 'color-palette', color: '#DB2777', bg: '#FCE7F3' },
+  { key: 'welder', label: 'Welder', icon: 'flame', color: '#DC2626', bg: '#FEF2F2' },
+];
+
+type Screen = 'welcome' | 'phone' | 'otp' | 'google-phone' | 'details' | 'selfie' | 'skills' | 'sellType' | 'teachType' | 'businessDocs' | 'location' | 'hospitalityItems';
+
+type PendingMenuItem = { title: string; description: string; price: string; category: string; imageUri?: string };
+type PendingRoom = { name: string; description: string; pricePerNight: string; capacity: string; imageUri?: string };
 
 export default function OnboardingScreen() {
   const insets = useSafeAreaInsets();
@@ -91,6 +131,7 @@ export default function OnboardingScreen() {
   // Profile fields
   const [userName, setUserName] = useState('');
   const [role, setRole] = useState<UserRole>('technician');
+  const [showMoreRoles, setShowMoreRoles] = useState(false);
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [city, setCity] = useState('');
   const [userState, setUserState] = useState('');
@@ -111,12 +152,25 @@ export default function OnboardingScreen() {
   const [gettingLocation, setGettingLocation] = useState(false);
   const [checking, setChecking] = useState(false);
   const [otpSendInProgress, setOtpSendInProgress] = useState(false); // Prevent double-send
+  const [venueDescription, setVenueDescription] = useState('');
+  const [venuePhone, setVenuePhone] = useState('');
+  const [pendingMenuItems, setPendingMenuItems] = useState<PendingMenuItem[]>([]);
+  const [pendingRooms, setPendingRooms] = useState<PendingRoom[]>([]);
+  const [itemTitle, setItemTitle] = useState('');
+  const [itemDescription, setItemDescription] = useState('');
+  const [itemPrice, setItemPrice] = useState('');
+  const [itemCategory, setItemCategory] = useState('');
+  const [itemCapacity, setItemCapacity] = useState('2');
+  const [itemImageUri, setItemImageUri] = useState('');
 
   const isCustomer = role === 'customer';
   const isSupplier = role === 'supplier';
   const isShopkeeper = role === 'shopkeeper';
   const isTeacher = role === 'teacher';
   const isTechnician = role === 'technician';
+  const isHotelOwner = role === 'hotel_owner';
+  const isRestaurantOwner = role === 'restaurant_owner';
+  const isHospitalityOwner = isHotelOwner || isRestaurantOwner;
 
   // Handle Google redirect params
   useEffect(() => {
@@ -151,7 +205,40 @@ export default function OnboardingScreen() {
     if (screen === 'location' && !locationGot) captureLocation();
   }, [screen]);
 
-  const sendOtp = async (phoneOrEmail: string, method: 'phone' | 'email' = 'phone') => {
+  /** OTP was just sent, or an unexpired OTP already exists — proceed to verify screen. */
+  function applyOtpSendSuccess(retryAfterSeconds?: number) {
+    const retrySec = Math.max(1, Number(retryAfterSeconds) || 60);
+    setOtpSent(true);
+    setOtpResendTimer(retrySec);
+    setOtpAttempts(0);
+    setOtpError('');
+    setScreen('otp');
+  }
+
+  function parseOtpSendResponse(data: any, resOk: boolean): {
+    ok: boolean;
+    retryAfterSeconds?: number;
+    message?: string;
+  } {
+    const msg = String(data?.message || '').trim();
+    const retrySec = Math.max(0, Number(data?.retryAfterSeconds) || 0);
+    const sent = !!(data?.sent || data?.smsSent);
+    const alreadySent = !!data?.alreadySent;
+
+    if (sent || alreadySent) {
+      return { ok: true, retryAfterSeconds: retrySec > 0 ? retrySec : 60, message: msg };
+    }
+    if (!resOk && retrySec > 0) {
+      return { ok: false, retryAfterSeconds: retrySec, message: msg || 'Too many OTP requests. Please wait.' };
+    }
+    return { ok: false, message: msg || 'Failed to send OTP' };
+  }
+
+  const sendOtp = async (
+    phoneOrEmail: string,
+    method: 'phone' | 'email' = 'phone',
+    options?: { forceResend?: boolean },
+  ) => {
     setOtpError('');
     
     // CRITICAL: Prevent double-send - IMMEDIATELY set flags
@@ -174,10 +261,10 @@ export default function OnboardingScreen() {
 
     if (method === 'phone') {
       // Phone OTP - Send SMS via backend
-      const digits = phoneOrEmail.replace(/\D/g, '').replace(/^91/, '');
-      if (digits.length !== 10) {
+      const digits = normalizeIndianMobileDigits(phoneOrEmail);
+      if (!digits) {
         const errorMsg = 'Please enter a valid 10-digit mobile number.';
-        console.warn('[OTP] Validation error:', errorMsg, 'Phone:', phoneOrEmail, 'Digits:', digits);
+        console.warn('[OTP] Validation error:', errorMsg, 'Phone:', phoneOrEmail);
         Alert.alert('Invalid Number', errorMsg);
         return;
       }
@@ -194,28 +281,29 @@ export default function OnboardingScreen() {
         const res = await expoFetch(`${baseUrl}/api/otp/send`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phone: digits }),
+          body: JSON.stringify({ phone: digits, forceResend: options?.forceResend === true }),
         });
 
         const data = await res.json() as any;
         console.log('[OTP-Phone] Response:', { success: data.success, sent: data.sent, smsSent: data.smsSent, message: data.message });
 
-        if (!data.sent && !data.smsSent) {
-          const errorMsg = data.message || 'Failed to send OTP';
+        const outcome = parseOtpSendResponse(data, res.ok);
+        if (!outcome.ok) {
+          const errorMsg = outcome.message || 'Failed to send OTP';
           console.error('[OTP-Phone] Failed:', errorMsg);
           setOtpError(errorMsg);
-          Alert.alert('Error', errorMsg);
+          if (outcome.retryAfterSeconds) {
+            setOtpRateLimitTimer(outcome.retryAfterSeconds);
+            setOtpResendTimer(outcome.retryAfterSeconds);
+          }
+          Alert.alert(outcome.retryAfterSeconds ? 'Please wait' : 'Error', errorMsg);
           return;
         }
 
-        console.log('[OTP-Phone] ✓ SMS OTP sent');
+        console.log('[OTP-Phone] ✓ SMS OTP ready');
         if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        setOtpSent(true);
-        setOtpResendTimer(60);
-        // Rate limit already set at function start - don't set again
-        setOtpAttempts(0);
+        applyOtpSendSuccess(outcome.retryAfterSeconds);
         setPhone(digits);
-        setScreen('otp');
       } catch (e: any) {
         const errorMsg = e?.message || 'Unable to send OTP. Please try again.';
         console.error('[OTP-Phone] Error:', errorMsg, e);
@@ -245,27 +333,29 @@ export default function OnboardingScreen() {
         const res = await expoFetch(`${baseUrl}/api/otp/send`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: emailTrimmed }),
+          body: JSON.stringify({ email: emailTrimmed, forceResend: options?.forceResend === true }),
         });
 
         const data = await res.json() as any;
         console.log('[OTP-Email] Response:', { success: data.success, sent: data.sent, message: data.message });
 
-        if (!data.sent) {
-          const errorMsg = data.message || 'Failed to send OTP';
+        const outcome = parseOtpSendResponse(data, res.ok);
+        if (!outcome.ok) {
+          const errorMsg = outcome.message || 'Failed to send OTP';
           console.error('[OTP-Email] Failed:', errorMsg);
           setOtpError(errorMsg);
-          Alert.alert('Error', errorMsg);
+          if (outcome.retryAfterSeconds) {
+            setOtpRateLimitTimer(outcome.retryAfterSeconds);
+            setOtpResendTimer(outcome.retryAfterSeconds);
+          }
+          Alert.alert(outcome.retryAfterSeconds ? 'Please wait' : 'Error', errorMsg);
           return;
         }
 
-        console.log('[OTP-Email] ✓ OTP sent to email');
+        console.log('[OTP-Email] ✓ OTP ready');
         if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        setOtpSent(true);
-        setOtpResendTimer(60);
-        setOtpAttempts(0);
+        applyOtpSendSuccess(outcome.retryAfterSeconds);
         setEmail(emailTrimmed);
-        setScreen('otp');
       } catch (e: any) {
         const errorMsg = e?.message || 'Unable to send email. Please try again.';
         console.error('[OTP-Email] Error:', errorMsg, e);
@@ -382,9 +472,8 @@ export default function OnboardingScreen() {
 
 
   const handleGooglePhoneSubmit = async () => {
-    const digits = phone.replace(/\D/g, '');
-    const phoneToSend = digits.length > 10 ? digits.slice(-10) : digits;
-    if (phoneToSend.length !== 10) { Alert.alert('Invalid Number', 'Please enter a valid 10-digit mobile number.'); return; }
+    const phoneToSend = normalizeIndianMobileDigits(phone);
+    if (!phoneToSend) { Alert.alert('Invalid Number', 'Please enter a valid 10-digit mobile number.'); return; }
     setChecking(true);
     try {
       const deviceId = await getDeviceId();
@@ -468,27 +557,30 @@ export default function OnboardingScreen() {
 
   const handleComplete = async () => {
     if (!city.trim() || !userState.trim()) { Alert.alert('Required', 'Please enter your city and state.'); return; }
+    if (isHospitalityOwner && !shopName.trim()) { Alert.alert('Required', 'Please enter your business name.'); return; }
+    if (isHospitalityOwner && !shopAddress.trim()) { Alert.alert('Required', 'Please enter your business address.'); return; }
     setUploadingSelfie(true);
     let avatarUrl = '';
     if (selfieUri) {
       const uploaded = await uploadSelfie(selfieUri);
       if (uploaded) { avatarUrl = uploaded; }
-      else { Alert.alert('Upload Failed', 'Could not upload your photo. Please try again.'); setUploadingSelfie(false); return; }
+      else if (!isHospitalityOwner) { Alert.alert('Upload Failed', 'Could not upload your photo. Please try again.'); setUploadingSelfie(false); return; }
     }
     if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    const cleanPhone = normalizeIndianMobileDigits(phone) || sanitizePhoneInput(phone);
     const p: UserProfile = {
       id: Crypto.randomUUID(),
       name: userName.trim(),
-      phone: phone.replace(/\D/g, '').trim(),
+      phone: cleanPhone,
       email: googleEmail || undefined,
       role, skills: selectedSkills,
       city: city.trim(), state: userState.trim(),
       experience: experience.trim(),
-      shopName: shopName.trim() || undefined, bio: '',
+      shopName: shopName.trim() || undefined, bio: isHospitalityOwner ? venueDescription.trim() : '',
       avatar: avatarUrl || undefined,
       sellType: (isSupplier || isShopkeeper) ? sellTypes.join(', ') : undefined,
       teachType: isTeacher ? teachType : undefined,
-      shopAddress: isSupplier ? shopAddress.trim() : undefined,
+      shopAddress: (isSupplier || isHospitalityOwner) ? shopAddress.trim() : undefined,
       gstNumber: (isSupplier || isShopkeeper) ? gstNumber.trim() : undefined,
       aadhaarNumber: (isSupplier || isTeacher || isShopkeeper) ? aadhaarNumber.trim() : undefined,
       panNumber: (isSupplier || isTeacher || isShopkeeper) ? panNumber.trim() : undefined,
@@ -496,10 +588,64 @@ export default function OnboardingScreen() {
       locationSharing: 'true', createdAt: Date.now(),
     };
     await completeOnboarding(p, sessionToken);
+
+    if (isHospitalityOwner) {
+      try {
+        const venueRes = await createVenueProfile({
+          ownerId: p.id,
+          ownerName: p.name,
+          venueType: isHotelOwner ? 'hotel' : 'restaurant',
+          name: shopName.trim(),
+          description: venueDescription.trim(),
+          address: shopAddress.trim(),
+          city: city.trim(),
+          state: userState.trim(),
+          latitude: latitude || '',
+          longitude: longitude || '',
+          phone: venuePhone.trim() || cleanPhone.slice(-10),
+          whatsapp: venuePhone.trim() || cleanPhone.slice(-10),
+        });
+        if (venueRes.success && venueRes.venue?.id) {
+          const venueId = venueRes.venue.id;
+          if (isRestaurantOwner) {
+            for (const item of pendingMenuItems) {
+              let imageUrl = '';
+              if (item.imageUri) imageUrl = (await uploadSelfie(item.imageUri)) || '';
+              await addMenuItem(venueId, {
+                ownerId: p.id,
+                title: item.title,
+                description: item.description,
+                price: item.price,
+                category: item.category,
+                image: imageUrl,
+              });
+            }
+          } else {
+            for (const room of pendingRooms) {
+              let imageUrl = '';
+              if (room.imageUri) imageUrl = (await uploadSelfie(room.imageUri)) || '';
+              await addHotelRoom(venueId, {
+                ownerId: p.id,
+                name: room.name,
+                description: room.description,
+                pricePerNight: room.pricePerNight,
+                capacity: Number(room.capacity) || 2,
+                image: imageUrl,
+              });
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[Onboarding] hospitality venue setup:', e);
+      }
+    }
+
     try {
       const welcomeText = isCustomer
         ? `Hey technicians! I just joined Mobi. Based in ${city.trim()}, ${userState.trim()}.`
-        : `Hi, I'm ${userName.trim()}, a ${ROLE_LABELS[role] || role} from ${city.trim()}, ${userState.trim()}. I'm using Mobi app!`;
+        : isHospitalityOwner
+          ? `Hi, I'm ${userName.trim()}, owner of ${shopName.trim()} (${ROLE_LABELS[role]}) in ${city.trim()}.`
+          : `Hi, I'm ${userName.trim()}, a ${ROLE_LABELS[role] || role} from ${city.trim()}, ${userState.trim()}. I'm using Mobi app!`;
       await apiRequest('POST', '/api/posts', { userId: p.id, userName: p.name, userRole: p.role, text: welcomeText, images: [], category: 'repair' });
     } catch {}
     setUploadingSelfie(false);
@@ -508,12 +654,13 @@ export default function OnboardingScreen() {
 
   const getNextScreen = (current: Screen): Screen | null => {
     switch (current) {
-      case 'details': return isCustomer ? 'location' : 'selfie';
+      case 'details': return isCustomer ? 'location' : isHospitalityOwner ? 'location' : 'selfie';
       case 'selfie': return isTechnician ? 'skills' : (isSupplier || isShopkeeper) ? 'sellType' : isTeacher ? 'teachType' : 'location';
       case 'skills': return 'location';
       case 'sellType': return 'businessDocs';
       case 'teachType': return 'businessDocs';
       case 'businessDocs': return 'location';
+      case 'location': return isHospitalityOwner ? 'hospitalityItems' : null;
       default: return null;
     }
   };
@@ -541,71 +688,89 @@ export default function OnboardingScreen() {
 
   const topInset = Platform.OS === 'web' ? 67 : insets.top;
   const botInset = Platform.OS === 'web' ? 34 : insets.bottom;
+  const handlePhoneChange = (text: string) => setPhone(sanitizePhoneInput(text));
+  const phoneDigitsValid = isValidIndianMobileInput(phone);
+  const phoneInputCommonProps = {
+    style: s.phoneInput,
+    placeholder: 'Enter mobile number',
+    placeholderTextColor: '#6B7280',
+    keyboardType: 'phone-pad' as const,
+    maxLength: 10,
+    value: phone,
+    onChangeText: handlePhoneChange,
+    returnKeyType: 'done' as const,
+    selectionColor: '#2563EB',
+    autoComplete: 'tel' as const,
+    textContentType: 'telephoneNumber' as const,
+    importantForAutofill: 'yes' as const,
+  };
 
   // ─── WELCOME SCREEN ──────────────────────────────────────────────────────────
   if (screen === 'welcome') {
     return (
-      <View style={s.screen}>
+      <KeyboardAvoidingView
+        style={s.screen}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? topInset : 0}
+      >
         <StatusBar style="light" />
-
-        <View style={s.heroContainer}>
-          <Image source={{ uri: HERO_IMAGE }} style={StyleSheet.absoluteFill} contentFit="cover" />
-          <LinearGradient colors={['transparent', 'rgba(0,0,0,0.1)', 'rgba(255,255,255,0.95)', '#FFFFFF']} style={s.heroGradient} />
-        </View>
-        <View style={[s.welcomeContent, { paddingBottom: Math.max(botInset, 20) }]}>
-          <Text style={s.welcomeTitle}>Welcome to Mobile{'\n'}Technician Community</Text>
-          <Text style={s.welcomeSubtitle}>Network, Learn & Grow with technicians across India.</Text>
-          <View style={s.welcomeActions}>
-            {/* Phone Input - Email OTP Hidden */}
-            {otpMethod === 'phone' && (
-              <>
-                <View style={s.phoneInputRow}>
-                  <View style={s.countryCode}><Text style={s.countryCodeText}>+91</Text></View>
-                  <TextInput
-                    style={s.phoneInput}
-                    placeholder="Enter mobile number"
-                    placeholderTextColor="#9CA3AF"
-                    keyboardType="phone-pad"
-                    maxLength={10}
-                    value={phone}
-                    onChangeText={setPhone}
-                    returnKeyType="done"
-                  />
-                </View>
-                <Pressable
-                  style={({ pressed }) => [s.primaryBtn, { opacity: pressed ? 0.85 : 1 }, (otpSending || otpRateLimitTimer > 0) && { opacity: 0.5 }]}
-                  onPress={() => sendOtp(phone, 'phone')}
-                  disabled={otpSending || otpRateLimitTimer > 0 || phone.replace(/\D/g, '').length < 10}
-                >
-                  {otpSending ? (
-                    <ActivityIndicator color="#FFF" />
-                  ) : otpRateLimitTimer > 0 ? (
-                    <Text style={s.primaryBtnText}>Resend in {otpRateLimitTimer}s</Text>
-                  ) : (
-                    <Text style={s.primaryBtnText}>Get OTP via SMS</Text>
-                  )}
-                </Pressable>
-                {otpError && <Text style={{ color: '#EF4444', fontSize: 12, marginTop: 8, textAlign: 'center' }}>{otpError}</Text>}
-              </>
-            )}
-
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={s.welcomeScroll}
+          bounces={false}
+        >
+          <View style={s.heroContainer}>
+            <Image source={{ uri: HERO_IMAGE }} style={StyleSheet.absoluteFill} contentFit="cover" />
+            <LinearGradient colors={['transparent', 'rgba(0,0,0,0.1)', 'rgba(255,255,255,0.95)', '#FFFFFF']} style={s.heroGradient} />
           </View>
-          <Text style={s.termsText}>
-            By continuing, you agree to our{' '}
-            <Text style={s.termsLink} onPress={() => openLink(`${getApiUrl()}/terms`, 'Terms')}>Terms</Text>
-            {' '}and{' '}
-            <Text style={s.termsLink} onPress={() => openLink(`${getApiUrl()}/privacy`, 'Privacy')}>Privacy Policy</Text>.
-          </Text>
-        </View>
-      </View>
+          <View style={[s.welcomeContent, { paddingBottom: Math.max(botInset, 20) }]}>
+            <Text style={s.welcomeTitle}>Welcome to Mobile{'\n'}Technician Community</Text>
+            <Text style={s.welcomeSubtitle}>Network, Learn & Grow with technicians across India.</Text>
+            <View style={s.welcomeActions}>
+              {otpMethod === 'phone' && (
+                <>
+                  <View style={s.phoneInputRow}>
+                    <View style={s.countryCode}><Text style={s.countryCodeText}>+91</Text></View>
+                    <TextInput {...phoneInputCommonProps} />
+                  </View>
+                  {phone.length > 0 && (
+                    <Text style={s.phoneHint}>{phone.length}/10 digits</Text>
+                  )}
+                  <Pressable
+                    style={({ pressed }) => [s.primaryBtn, { opacity: pressed ? 0.85 : 1 }, (otpSending || otpRateLimitTimer > 0 || !phoneDigitsValid) && { opacity: 0.5 }]}
+                    onPress={() => sendOtp(phone, 'phone')}
+                    disabled={otpSending || otpRateLimitTimer > 0 || !phoneDigitsValid}
+                  >
+                    {otpSending ? (
+                      <ActivityIndicator color="#FFF" />
+                    ) : otpRateLimitTimer > 0 ? (
+                      <Text style={s.primaryBtnText}>Resend in {otpRateLimitTimer}s</Text>
+                    ) : (
+                      <Text style={s.primaryBtnText}>Get OTP via SMS</Text>
+                    )}
+                  </Pressable>
+                  {otpError && <Text style={{ color: '#EF4444', fontSize: 12, marginTop: 8, textAlign: 'center' }}>{otpError}</Text>}
+                </>
+              )}
+            </View>
+            <Text style={s.termsText}>
+              By continuing, you agree to our{' '}
+              <Text style={s.termsLink} onPress={() => openLink(`${getApiUrl()}/terms`, 'Terms')}>Terms</Text>
+              {' '}and{' '}
+              <Text style={s.termsLink} onPress={() => openLink(`${getApiUrl()}/privacy`, 'Privacy')}>Privacy Policy</Text>.
+            </Text>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     );
   }
 
   // ─── PHONE SCREEN (fallback if navigated directly) ───────────────────────────
   if (screen === 'phone') {
     return (
-      <KeyboardAvoidingView style={s.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={s.screen} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? topInset : 0}>
         <StatusBar style="dark" />
+        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ flexGrow: 1 }}>
         <View style={[s.formScreen, { paddingTop: topInset + 20, paddingBottom: Math.max(botInset, 20) }]}>
           <Pressable style={s.backBtn} onPress={() => setScreen('welcome')}>
             <Ionicons name="chevron-back" size={24} color="#374151" />
@@ -616,21 +781,13 @@ export default function OnboardingScreen() {
           </View>
           <View style={s.phoneInputRow}>
             <View style={s.countryCode}><Text style={s.countryCodeText}>+91</Text></View>
-            <TextInput
-              style={s.phoneInput}
-              placeholder="10-digit mobile number"
-              placeholderTextColor="#9CA3AF"
-              keyboardType="phone-pad"
-              maxLength={10}
-              value={phone}
-              onChangeText={setPhone}
-              autoFocus
-            />
+            <TextInput {...phoneInputCommonProps} autoFocus />
           </View>
+          {phone.length > 0 && <Text style={s.phoneHint}>{phone.length}/10 digits</Text>}
           <Pressable
-            style={({ pressed }) => [s.primaryBtn, { marginTop: 16, opacity: pressed ? 0.85 : 1 }, (otpSending || otpRateLimitTimer > 0) && { opacity: 0.5 }]}
+            style={({ pressed }) => [s.primaryBtn, { marginTop: 16, opacity: pressed ? 0.85 : 1 }, (otpSending || otpRateLimitTimer > 0 || !phoneDigitsValid) && { opacity: 0.5 }]}
             onPress={() => sendOtp(phone)}
-            disabled={otpSending || otpRateLimitTimer > 0 || phone.replace(/\D/g, '').length < 10}
+            disabled={otpSending || otpRateLimitTimer > 0 || !phoneDigitsValid}
           >
             {otpSending ? (
               <ActivityIndicator color="#FFF" />
@@ -642,6 +799,7 @@ export default function OnboardingScreen() {
           </Pressable>
           {otpRateLimitTimer > 0 && <Text style={s.errorText}>Rate limited. Wait {otpRateLimitTimer}s.</Text>}
         </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     );
   }
@@ -694,7 +852,7 @@ export default function OnboardingScreen() {
               <Text style={s.resendText}>Didn't receive code?</Text>
               <Pressable
                 style={[s.resendBtn, otpResendTimer > 0 && { opacity: 0.5 }]}
-                onPress={() => otpResendTimer === 0 && sendOtp(phone)}
+                onPress={() => otpResendTimer === 0 && sendOtp(phone, 'phone', { forceResend: true })}
                 disabled={otpResendTimer > 0 || otpSending}
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
@@ -725,8 +883,9 @@ export default function OnboardingScreen() {
   // ─── GOOGLE PHONE SCREEN ─────────────────────────────────────────────────────
   if (screen === 'google-phone') {
     return (
-      <KeyboardAvoidingView style={s.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={s.screen} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? topInset : 0}>
         <StatusBar style="dark" />
+        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ flexGrow: 1 }}>
         <View style={[s.formScreen, { paddingTop: topInset + 20, paddingBottom: Math.max(botInset, 20) }]}>
           <View style={s.formHeader}>
             <Text style={s.formTitle}>Link your number</Text>
@@ -734,25 +893,18 @@ export default function OnboardingScreen() {
           </View>
           <View style={s.phoneInputRow}>
             <View style={s.countryCode}><Text style={s.countryCodeText}>+91</Text></View>
-            <TextInput
-              style={s.phoneInput}
-              placeholder="10-digit mobile number"
-              placeholderTextColor="#9CA3AF"
-              keyboardType="phone-pad"
-              maxLength={10}
-              value={phone}
-              onChangeText={setPhone}
-              autoFocus
-            />
+            <TextInput {...phoneInputCommonProps} autoFocus />
           </View>
+          {phone.length > 0 && <Text style={s.phoneHint}>{phone.length}/10 digits</Text>}
           <Pressable
-            style={({ pressed }) => [s.primaryBtn, { marginTop: 16, opacity: pressed ? 0.85 : 1 }]}
+            style={({ pressed }) => [s.primaryBtn, { marginTop: 16, opacity: pressed ? 0.85 : 1 }, (!phoneDigitsValid || checking) && { opacity: 0.5 }]}
             onPress={handleGooglePhoneSubmit}
-            disabled={checking || phone.replace(/\D/g, '').length < 10}
+            disabled={checking || !phoneDigitsValid}
           >
             {checking ? <ActivityIndicator color="#FFF" /> : <Text style={s.primaryBtnText}>Continue</Text>}
           </Pressable>
         </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     );
   }
@@ -780,15 +932,64 @@ export default function OnboardingScreen() {
                   <Text style={[s.roleLabel, role === r.key && { color: r.color, fontWeight: '600' }]}>{r.label}</Text>
                 </Pressable>
               ))}
+              <Pressable
+                style={[s.roleCard, showMoreRoles && { borderColor: '#0F172A', borderWidth: 2 }]}
+                onPress={() => { setShowMoreRoles(v => !v); if (Platform.OS !== 'web') Haptics.selectionAsync(); }}
+              >
+                <Ionicons name={showMoreRoles ? 'chevron-up' : 'add-circle-outline'} size={24} color="#0F172A" />
+                <Text style={[s.roleLabel, { color: '#0F172A', fontWeight: '600' }]}>
+                  {showMoreRoles ? 'Less' : 'I provide service'}
+                </Text>
+              </Pressable>
             </View>
+            {showMoreRoles && (
+              <View style={[s.rolesGrid, { marginTop: 10 }]}>
+                {PROVIDER_EXTRA_ROLES.map(r => (
+                  <Pressable
+                    key={r.key}
+                    style={[s.roleCard, role === r.key && { borderColor: r.color, borderWidth: 2, backgroundColor: r.bg }]}
+                    onPress={() => { setRole(r.key); if (Platform.OS !== 'web') Haptics.selectionAsync(); }}
+                  >
+                    <Ionicons name={r.icon} size={24} color={role === r.key ? r.color : '#6B7280'} />
+                    <Text style={[s.roleLabel, role === r.key && { color: r.color, fontWeight: '600' }]}>{r.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            )}
           </View>
-          {!isCustomer && (
+          {!isCustomer && !isSupplier && !isHospitalityOwner && (
             <View style={s.field}>
               <Text style={s.label}>Shop / Business Name</Text>
               <TextInput style={s.input} placeholder="e.g. Raj Mobile Repairs" placeholderTextColor="#9CA3AF" value={shopName} onChangeText={setShopName} />
             </View>
           )}
-          {!isCustomer && (
+          {isHospitalityOwner && (
+            <>
+              <View style={s.field}>
+                <Text style={s.label}>{isHotelOwner ? 'Hotel Name *' : 'Restaurant Name *'}</Text>
+                <TextInput style={s.input} placeholder={isHotelOwner ? 'Grand Palace Hotel' : 'Srinivasa Restaurant'} placeholderTextColor="#9CA3AF" value={shopName} onChangeText={setShopName} />
+              </View>
+              <View style={s.field}>
+                <Text style={s.label}>About your business</Text>
+                <TextInput style={[s.input, { height: 80, textAlignVertical: 'top' }]} placeholder="Describe your hotel or restaurant..." placeholderTextColor="#9CA3AF" value={venueDescription} onChangeText={setVenueDescription} multiline />
+              </View>
+              <View style={s.field}>
+                <Text style={s.label}>Business Address *</Text>
+                <TextInput style={[s.input, { height: 72, textAlignVertical: 'top' }]} placeholder="Full street address" placeholderTextColor="#9CA3AF" value={shopAddress} onChangeText={setShopAddress} multiline />
+              </View>
+              <View style={s.field}>
+                <Text style={s.label}>Contact Phone</Text>
+                <TextInput style={s.input} placeholder="10-digit mobile" placeholderTextColor="#9CA3AF" value={venuePhone} onChangeText={setVenuePhone} keyboardType="phone-pad" maxLength={10} />
+              </View>
+            </>
+          )}
+          {isSupplier && (
+            <View style={s.field}>
+              <Text style={s.label}>Business Name</Text>
+              <TextInput style={s.input} placeholder="e.g. Arun Spare Parts" placeholderTextColor="#9CA3AF" value={shopName} onChangeText={setShopName} />
+            </View>
+          )}
+          {!isCustomer && !isHospitalityOwner && (
             <View style={s.field}>
               <Text style={s.label}>Experience</Text>
               <TextInput style={s.input} placeholder="e.g. 3 years" placeholderTextColor="#9CA3AF" value={experience} onChangeText={setExperience} />
@@ -798,6 +999,8 @@ export default function OnboardingScreen() {
             style={({ pressed }) => [s.primaryBtn, { marginTop: 8, opacity: pressed ? 0.85 : 1 }]}
             onPress={() => {
               if (!userName.trim()) { Alert.alert('Required', 'Please enter your name.'); return; }
+              if (isHospitalityOwner && !shopName.trim()) { Alert.alert('Required', 'Please enter your business name.'); return; }
+              if (isHospitalityOwner && !shopAddress.trim()) { Alert.alert('Required', 'Please enter your business address.'); return; }
               if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               nextScreen();
             }}
@@ -951,8 +1154,8 @@ export default function OnboardingScreen() {
           </View>
           {isSupplier && (
             <View style={s.field}>
-              <Text style={s.label}>Shop Address</Text>
-              <TextInput style={[s.input, { height: 80, textAlignVertical: 'top' }]} placeholder="Full shop address" placeholderTextColor="#9CA3AF" value={shopAddress} onChangeText={setShopAddress} multiline />
+              <Text style={s.label}>Business Address</Text>
+              <TextInput style={[s.input, { height: 80, textAlignVertical: 'top' }]} placeholder="Warehouse / office address" placeholderTextColor="#9CA3AF" value={shopAddress} onChangeText={setShopAddress} multiline />
             </View>
           )}
           <View style={s.field}>
@@ -972,7 +1175,7 @@ export default function OnboardingScreen() {
           <Pressable
             style={({ pressed }) => [s.primaryBtn, { marginTop: 8, opacity: pressed ? 0.85 : 1 }]}
             onPress={() => {
-              if (isSupplier && !shopAddress.trim()) { Alert.alert('Required', 'Please enter your shop address.'); return; }
+              if (isSupplier && !shopAddress.trim()) { Alert.alert('Required', 'Please enter your business address.'); return; }
               if (!isShopkeeper && !aadhaarNumber.trim()) { Alert.alert('Required', 'Please enter your Aadhaar number.'); return; }
               if (!isShopkeeper && !panNumber.trim()) { Alert.alert('Required', 'Please enter your PAN number.'); return; }
               nextScreen();
@@ -993,7 +1196,9 @@ export default function OnboardingScreen() {
         <ScrollView contentContainerStyle={[s.scrollContent, { paddingTop: topInset + 20, paddingBottom: Math.max(botInset, 24) }]} keyboardShouldPersistTaps="handled">
           <View style={s.formHeader}>
             <Text style={s.formTitle}>Your location</Text>
-            <Text style={s.formSubtitle}>Helps connect you with nearby professionals</Text>
+            <Text style={s.formSubtitle}>
+              {isHospitalityOwner ? 'GPS helps customers find your hotel or restaurant' : 'Helps connect you with nearby professionals'}
+            </Text>
           </View>
           {locationGot && (
             <View style={s.locationBadge}>
@@ -1019,10 +1224,16 @@ export default function OnboardingScreen() {
           </View>
           <Pressable
             style={({ pressed }) => [s.primaryBtn, { marginTop: 8, opacity: (pressed || uploadingSelfie) ? 0.85 : 1 }]}
-            onPress={handleComplete}
+            onPress={() => {
+              if (!city.trim() || !userState.trim()) { Alert.alert('Required', 'Please enter your city and state.'); return; }
+              if (isHospitalityOwner) nextScreen();
+              else handleComplete();
+            }}
             disabled={uploadingSelfie}
           >
-            {uploadingSelfie ? <ActivityIndicator color="#FFF" /> : <Text style={s.primaryBtnText}>Complete Setup</Text>}
+            {uploadingSelfie ? <ActivityIndicator color="#FFF" /> : (
+              <Text style={s.primaryBtnText}>{isHospitalityOwner ? 'Continue' : 'Complete Setup'}</Text>
+            )}
           </Pressable>
         </ScrollView>
         <Modal visible={showStatePicker} animationType="slide" presentationStyle="pageSheet">
@@ -1046,23 +1257,141 @@ export default function OnboardingScreen() {
     );
   }
 
+  // ─── HOSPITALITY ITEMS SCREEN ────────────────────────────────────────────────
+  if (screen === 'hospitalityItems') {
+    const addPendingItem = async () => {
+      if (!itemTitle.trim() || !itemPrice.trim()) {
+        Alert.alert('Required', isHotelOwner ? 'Room name and price are required.' : 'Item name and price are required.');
+        return;
+      }
+      if (isRestaurantOwner) {
+        setPendingMenuItems((prev) => [...prev, {
+          title: itemTitle.trim(),
+          description: itemDescription.trim(),
+          price: itemPrice.trim(),
+          category: itemCategory.trim(),
+          imageUri: itemImageUri || undefined,
+        }]);
+      } else {
+        setPendingRooms((prev) => [...prev, {
+          name: itemTitle.trim(),
+          description: itemDescription.trim(),
+          pricePerNight: itemPrice.trim(),
+          capacity: itemCapacity.trim() || '2',
+          imageUri: itemImageUri || undefined,
+        }]);
+      }
+      setItemTitle('');
+      setItemDescription('');
+      setItemPrice('');
+      setItemCategory('');
+      setItemCapacity('2');
+      setItemImageUri('');
+      if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    };
+
+    const pickItemPhoto = async () => {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') { Alert.alert('Permission needed', 'Allow photo access to upload images.'); return; }
+      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8 });
+      if (!result.canceled && result.assets[0]) setItemImageUri(result.assets[0].uri);
+    };
+
+    const pendingCount = isRestaurantOwner ? pendingMenuItems.length : pendingRooms.length;
+
+    return (
+      <KeyboardAvoidingView style={s.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <StatusBar style="dark" />
+        <ScrollView contentContainerStyle={[s.scrollContent, { paddingTop: topInset + 20, paddingBottom: Math.max(botInset, 24) }]} keyboardShouldPersistTaps="handled">
+          <View style={s.formHeader}>
+            <Text style={s.formTitle}>{isHotelOwner ? 'Add your rooms' : 'Add your menu items'}</Text>
+            <Text style={s.formSubtitle}>Upload food items or rooms with photos. You can add more later from My Venue tab.</Text>
+          </View>
+
+          <View style={s.field}>
+            <Text style={s.label}>{isHotelOwner ? 'Room Name *' : 'Item Name *'}</Text>
+            <TextInput style={s.input} placeholder={isHotelOwner ? 'Deluxe AC Room' : 'Masala Dosa'} placeholderTextColor="#9CA3AF" value={itemTitle} onChangeText={setItemTitle} />
+          </View>
+          <View style={s.field}>
+            <Text style={s.label}>Description</Text>
+            <TextInput style={[s.input, { height: 72, textAlignVertical: 'top' }]} placeholder="Details..." placeholderTextColor="#9CA3AF" value={itemDescription} onChangeText={setItemDescription} multiline />
+          </View>
+          {isRestaurantOwner ? (
+            <View style={s.field}>
+              <Text style={s.label}>Category</Text>
+              <TextInput style={s.input} placeholder="Starter, Main course..." placeholderTextColor="#9CA3AF" value={itemCategory} onChangeText={setItemCategory} />
+            </View>
+          ) : (
+            <View style={s.field}>
+              <Text style={s.label}>Capacity (guests)</Text>
+              <TextInput style={s.input} placeholder="2" placeholderTextColor="#9CA3AF" value={itemCapacity} onChangeText={setItemCapacity} keyboardType="number-pad" />
+            </View>
+          )}
+          <View style={s.field}>
+            <Text style={s.label}>{isHotelOwner ? 'Price per night (₹) *' : 'Price (₹) *'}</Text>
+            <TextInput style={s.input} placeholder="499" placeholderTextColor="#9CA3AF" value={itemPrice} onChangeText={setItemPrice} keyboardType="decimal-pad" />
+          </View>
+          <Pressable style={[s.outlineBtn, { marginBottom: 12 }]} onPress={pickItemPhoto}>
+            <Ionicons name="image" size={18} color="#3B82F6" />
+            <Text style={s.outlineBtnText}>{itemImageUri ? 'Photo selected' : 'Upload photo'}</Text>
+          </Pressable>
+          {itemImageUri ? (
+            <Image source={{ uri: itemImageUri }} style={{ width: '100%', height: 140, borderRadius: 12, marginBottom: 12 }} contentFit="cover" />
+          ) : null}
+          <Pressable style={({ pressed }) => [s.outlineBtn, { marginBottom: 16, opacity: pressed ? 0.85 : 1 }]} onPress={addPendingItem}>
+            <Ionicons name="add-circle-outline" size={18} color="#3B82F6" />
+            <Text style={s.outlineBtnText}>Add to list</Text>
+          </Pressable>
+
+          {pendingCount > 0 && (
+            <View style={{ marginBottom: 16 }}>
+              <Text style={[s.label, { marginBottom: 8 }]}>Added ({pendingCount})</Text>
+              {(isRestaurantOwner ? pendingMenuItems : pendingRooms).map((entry, idx) => (
+                <View key={idx} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}>
+                  <Text style={{ flex: 1, color: '#374151', fontSize: 14 }}>
+                    {'title' in entry ? entry.title : entry.name}
+                  </Text>
+                  <Text style={{ color: '#6B46C1', fontWeight: '600' }}>
+                    ₹{'price' in entry ? entry.price : entry.pricePerNight}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          )}
+
+          <Pressable
+            style={({ pressed }) => [s.primaryBtn, { opacity: (pressed || uploadingSelfie) ? 0.85 : 1 }]}
+            onPress={handleComplete}
+            disabled={uploadingSelfie}
+          >
+            {uploadingSelfie ? <ActivityIndicator color="#FFF" /> : (
+              <Text style={s.primaryBtnText}>{pendingCount > 0 ? 'Complete Setup' : 'Skip & Complete Setup'}</Text>
+            )}
+          </Pressable>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    );
+  }
+
   return null;
 }
 
 const s = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#FFFFFF' },
   // Welcome
-  heroContainer: { width: '100%', height: '48%', overflow: 'hidden' },
+  welcomeScroll: { flexGrow: 1 },
+  heroContainer: { width: '100%', height: 280, overflow: 'hidden' },
   heroGradient: { position: 'absolute', bottom: 0, left: 0, right: 0, height: '60%' },
   welcomeContent: { flex: 1, paddingHorizontal: 24, paddingTop: 20 },
   welcomeTitle: { fontSize: 26, fontWeight: '700', color: '#111827', textAlign: 'center', lineHeight: 34, marginBottom: 10 },
   welcomeSubtitle: { fontSize: 14, color: '#6B7280', textAlign: 'center', lineHeight: 20, marginBottom: 28 },
   welcomeActions: { gap: 12 },
   // Phone input
-  phoneInputRow: { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderColor: '#E5E7EB', borderRadius: 14, backgroundColor: '#FAFAFA', overflow: 'hidden' },
-  countryCode: { paddingHorizontal: 14, paddingVertical: 14, borderRightWidth: 1, borderRightColor: '#E5E7EB', backgroundColor: '#F3F4F6' },
-  countryCodeText: { fontSize: 15, fontWeight: '600', color: '#374151' },
-  phoneInput: { flex: 1, paddingHorizontal: 14, paddingVertical: 14, fontSize: 16, color: '#111827', fontWeight: '500' },
+  phoneInputRow: { flexDirection: 'row', alignItems: 'center', borderWidth: 2, borderColor: '#D1D5DB', borderRadius: 14, backgroundColor: '#FFFFFF', overflow: 'hidden' },
+  countryCode: { paddingHorizontal: 14, paddingVertical: 16, borderRightWidth: 1, borderRightColor: '#E5E7EB', backgroundColor: '#F3F4F6' },
+  countryCodeText: { fontSize: 16, fontWeight: '700', color: '#111827' },
+  phoneInput: { flex: 1, paddingHorizontal: 16, paddingVertical: 16, fontSize: 20, color: '#000000', fontWeight: '700', letterSpacing: 1.5, backgroundColor: '#FFFFFF' },
+  phoneHint: { fontSize: 12, color: '#6B7280', marginTop: 6, marginLeft: 4, fontWeight: '600' },
   // Buttons
   primaryBtn: { backgroundColor: '#2563EB', borderRadius: 14, paddingVertical: 15, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, shadowColor: '#2563EB', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8, elevation: 4 },
   primaryBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
