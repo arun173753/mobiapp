@@ -1,4 +1,114 @@
-export type UserRole = 'technician' | 'teacher' | 'supplier' | 'shopkeeper' | 'job_provider' | 'customer' | 'admin';
+export type UserRole =
+  | 'technician'
+  | 'teacher'
+  | 'supplier'
+  | 'shopkeeper'
+  | 'job_provider'
+  | 'customer'
+  | 'admin'
+  | 'doctor'
+  | 'lawyer'
+  | 'software_developer'
+  | 'digital_marketer'
+  | 'driver'
+  | 'delivery_partner'
+  | 'freelancer'
+  | 'service_provider'
+  | 'labour'
+  | 'cleaner'
+  | 'mechanic'
+  | 'electrician'
+  | 'plumber'
+  | 'carpenter'
+  | 'painter'
+  | 'welder'
+  | 'hotel_owner'
+  | 'restaurant_owner';
+
+/**
+ * All "I provide a service" roles. Customers and admins are excluded.
+ * Used by directory, leads, and the unified provider tab layout.
+ */
+export const PROVIDER_ROLES: readonly UserRole[] = [
+  'technician',
+  'teacher',
+  'supplier',
+  'shopkeeper',
+  'doctor',
+  'lawyer',
+  'software_developer',
+  'digital_marketer',
+  'driver',
+  'delivery_partner',
+  'freelancer',
+  'service_provider',
+  'labour',
+  'cleaner',
+  'mechanic',
+  'electrician',
+  'plumber',
+  'carpenter',
+  'painter',
+  'welder',
+] as const;
+
+/** Same as PROVIDER_ROLES — unified subscription (1/6/12 month, trial, video) for all providers. */
+export const SUBSCRIPTION_ROLES = PROVIDER_ROLES;
+
+export function isProviderRole(role?: string | null): boolean {
+  if (!role) return false;
+  return (PROVIDER_ROLES as readonly string[]).includes(String(role));
+}
+
+/** Drivers and delivery partners — accept rides via service bookings + ride pool. */
+export function isRidePartnerRole(role?: string | null): boolean {
+  const r = String(role || '').toLowerCase();
+  return r === 'driver' || r === 'delivery_partner';
+}
+
+/** Book bike taxi — available for every role except technician. */
+export function canBookRide(role?: string | null): boolean {
+  return String(role || '').toLowerCase() !== 'technician';
+}
+
+export function isHospitalityOwnerRole(role?: string | null): boolean {
+  return role === 'hotel_owner' || role === 'restaurant_owner';
+}
+
+export function isSubscriptionGatedRole(role?: string | null): boolean {
+  return isProviderRole(role) || isHospitalityOwnerRole(role);
+}
+
+/** Courses + Solutions tabs (technician, teacher, shopkeeper only). */
+export const COURSES_SOLUTIONS_ROLES: readonly UserRole[] = [
+  'technician',
+  'teacher',
+  'shopkeeper',
+] as const;
+
+export function hasCoursesAndSolutionsAccess(role?: string | null): boolean {
+  if (!role) return false;
+  return (COURSES_SOLUTIONS_ROLES as readonly string[]).includes(String(role));
+}
+
+/** Roles users may switch to themselves (Settings → Switch Role). Excludes admin unless admin/super-admin. */
+export const SELF_SERVICE_SWITCHABLE_ROLES: readonly UserRole[] = [
+  'customer',
+  'job_provider',
+  'hotel_owner',
+  'restaurant_owner',
+  ...PROVIDER_ROLES,
+] as const;
+
+/** Every role an admin can assign via Admin → Users → Change Role. */
+export const ADMIN_ASSIGNABLE_ROLES: readonly UserRole[] = [
+  'customer',
+  'job_provider',
+  'hotel_owner',
+  'restaurant_owner',
+  ...PROVIDER_ROLES,
+  'admin',
+] as const;
 
 export interface UserProfile {
   id: string;
@@ -32,6 +142,7 @@ export interface UserProfile {
   rating?: string;
   ratingCount?: string;
   profileLikes?: string;
+  lastSeen?: number;
   createdAt: number;
 }
 
@@ -53,6 +164,9 @@ export interface Post {
   userName: string;
   userRole: UserRole;
   userAvatar?: string;
+  /** Aggregate author rating when backend enriches posts */
+  authorRating?: string;
+  authorRatingCount?: string;
   text: string;
   images: string[];
   videoUrl?: string;
@@ -80,7 +194,16 @@ export interface Job {
   state: string;
   skills: string[];
   salary?: string;
-  type: 'full_time' | 'part_time' | 'contract';
+  type: 'full_time' | 'part_time' | 'contract' | 'freelance';
+  category?: string;
+  location?: string;
+  contactPhone?: string;
+  image?: string;
+  companyName?: string;
+  status?: string;
+  approved?: number;
+  featured?: number;
+  saved?: boolean;
   createdAt: number;
 }
 
@@ -103,21 +226,6 @@ export interface Conversation {
   lastMessageAt: number;
   messages: ChatMessage[];
   unreadCount: number;
-}
-
-export interface Reel {
-  id: string;
-  userId: string;
-  userName: string;
-  userAvatar?: string;
-  title: string;
-  description: string;
-  videoUrl: string;
-  thumbnailUrl?: string;
-  likes: string[];
-  comments: Comment[];
-  views: number;
-  createdAt: number;
 }
 
 export type ProductCategory = 'course' | 'tutorial' | 'ebook' | 'spare_part' | 'tool' | 'component' | 'accessory' | 'other';
@@ -210,6 +318,8 @@ export interface Order {
   totalAmount: string;
   status: OrderStatus;
   shippingAddress?: string;
+  deliveryLatitude?: string;
+  deliveryLongitude?: string;
   buyerNotes?: string;
   sellerNotes?: string;
   updatedAt: number;
@@ -259,6 +369,24 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   job_provider: 'Job Provider',
   customer: 'Customer',
   admin: 'Admin',
+  doctor: 'Doctor',
+  lawyer: 'Lawyer',
+  software_developer: 'Software Developer',
+  digital_marketer: 'Digital Marketer',
+  driver: 'Driver',
+  delivery_partner: 'Delivery Partner',
+  freelancer: 'Freelancer',
+  service_provider: 'Service Provider',
+  labour: 'Labour',
+  cleaner: 'Cleaner',
+  mechanic: 'Mechanic',
+  electrician: 'Electrician',
+  plumber: 'Plumber',
+  carpenter: 'Carpenter',
+  painter: 'Painter',
+  welder: 'Welder',
+  hotel_owner: 'Hotel Owner',
+  restaurant_owner: 'Restaurant Owner',
 };
 
 export const SHOPKEEPER_SELL_TYPES = ['Mobile Accessories', 'Phone Cases', 'Chargers & Cables', 'Screen Protectors', 'Earphones', 'Power Banks', 'Spare Parts', 'Other'];
@@ -275,20 +403,18 @@ export const SUPPLIER_SELL_TYPES = ['Spare Parts', 'Accessories', 'Tools', 'Soft
 
 export const TEACHER_TEACH_TYPES = ['Software', 'Hardware'];
 
+/** Primary super-admin line (10 digits, or last 10 of +91…). Only this account may use the admin panel. */
 export const ADMIN_PHONE = '8179142535';
 
-const LEGACY_ADMIN_PHONES = new Set(['8179142535', '9876543210', '9398391742']);
-const LEGACY_ADMIN_EMAIL = 'atozmobilerepaircourse@gmail.com';
-
-/** Matches server lead admin check + tab layout. */
+/**
+ * Admin panel / super-admin affordances in the app. Intentionally **phone-only** so a stale
+ * `role: 'admin'` row, test numbers, or email cannot open admin UI after a glitch.
+ */
 export function isAdminUser(profile: { role?: string; phone?: string; email?: string } | null | undefined): boolean {
-  if (!profile) return false;
-  if (profile.role === 'admin') return true;
-  const cleanPhone = profile.phone?.replace(/\D/g, '') || '';
-  const last10 = cleanPhone.slice(-10);
-  if (LEGACY_ADMIN_PHONES.has(cleanPhone) || LEGACY_ADMIN_PHONES.has(last10)) return true;
-  if ((profile.email || '').toLowerCase() === LEGACY_ADMIN_EMAIL) return true;
-  return false;
+  if (!profile?.phone) return false;
+  const digits = String(profile.phone).replace(/\D/g, '');
+  const last10 = digits.slice(-10);
+  return last10 === ADMIN_PHONE;
 }
 
 export const SKILLS_LIST = [

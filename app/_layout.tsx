@@ -1,10 +1,9 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import React, { useEffect } from "react";
-import { Alert, Platform } from "react-native";
+import React, { useEffect, useState, useCallback } from "react";
+import { Alert, Platform, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import { KeyboardProvider } from "react-native-keyboard-controller";
 import { StatusBar } from "expo-status-bar";
 
 // import * as ScreenCapture from "expo-screen-capture"; // Disabled for stability
@@ -25,6 +24,10 @@ import { requestNotificationPermission, cleanupSounds } from "@/lib/notification
 import { initOneSignal, requestOneSignalPermission } from "@/lib/onesignal";
 import { ensureHighPriorityChannel } from "@/lib/notifee";
 import { FloatingUploadBanner } from "@/components/FloatingUploadBanner";
+import { NavDrawerProvider, TopProfileButton, FloatingShopButton, FloatingPostButton } from "@/components/home/HomeNavMenu";
+import { PremiumRepairIntro } from "@/components/PremiumRepairIntro";
+import { AppIntroSplash } from "@/components/AppIntroSplash";
+import { fetchAppIntroConfig, getCachedAppIntroConfig } from "@/lib/app-intro";
 import { Buffer } from "buffer";
 import { API_URL } from "@/lib/api-config";
 
@@ -49,6 +52,7 @@ function SecuredApp() {
   const userId = (isOnboarded && profile?.id) ? profile.id : null;
   return (
     <SecurityProvider userId={userId}>
+      <NavDrawerProvider>
       <Stack screenOptions={{ headerShown: false, headerBackTitle: "Back", contentStyle: { backgroundColor: '#FAFAFA' } }}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="onboarding" options={{ gestureEnabled: false }} />
@@ -59,6 +63,9 @@ function SecuredApp() {
         <Stack.Screen name="reels" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="upload-reel" options={{ animation: 'slide_from_bottom' }} />
         <Stack.Screen name="user-profile" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="live-providers" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="find-providers" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="technician-map" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="add-product" options={{ animation: 'slide_from_bottom' }} />
         <Stack.Screen name="product-detail" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="cart" options={{ animation: 'slide_from_right' }} />
@@ -82,13 +89,24 @@ function SecuredApp() {
         <Stack.Screen name="repair-booking" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="insurance" options={{ animation: 'slide_from_bottom' }} />
         <Stack.Screen name="ai-repair" options={{ animation: 'slide_from_bottom' }} />
+        <Stack.Screen name="spare-parts" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="spare-checkout" options={{ animation: 'slide_from_right' }} />
       </Stack>
       <FloatingUploadBanner />
+      <TopProfileButton />
+      <FloatingPostButton />
+      <FloatingShopButton />
+      </NavDrawerProvider>
     </SecurityProvider>
   );
 }
 
 export default function RootLayout() {
+  const [showIntro, setShowIntro] = useState(true);
+  const [introVideoUrl, setIntroVideoUrl] = useState<string | null>(null);
+  const [introDurationSeconds, setIntroDurationSeconds] = useState(0);
+  const [introUseVideo, setIntroUseVideo] = useState(false);
+  const [introConfigLoaded, setIntroConfigLoaded] = useState(false);
   const [fontsLoaded, fontError] = useFonts({
     Inter_400Regular,
     Inter_500Medium,
@@ -96,11 +114,75 @@ export default function RootLayout() {
     Inter_700Bold,
     ...Ionicons.font,
   });
+
+  const finishIntro = useCallback(() => {
+    setShowIntro(false);
+  }, []);
+
   useEffect(() => {
-    if (fontsLoaded || fontError) {
-      SplashScreen.hideAsync();
-    }
-  }, [fontsLoaded, fontError]);
+    let cancelled = false;
+
+    const applyIntro = (cfg: { videoUrl: string; durationSeconds?: number }) => {
+      if (cfg.videoUrl) {
+        setIntroUseVideo(true);
+        setIntroVideoUrl(cfg.videoUrl);
+        setIntroDurationSeconds(Math.max(0, Math.floor(cfg.durationSeconds || 0)));
+        setShowIntro(true);
+      } else {
+        setIntroUseVideo(false);
+        setIntroVideoUrl(null);
+        setIntroDurationSeconds(0);
+        setShowIntro(Platform.OS !== "web");
+      }
+    };
+
+    getCachedAppIntroConfig()
+      .then((cached) => {
+        if (cancelled || !cached?.videoUrl) return;
+        applyIntro(cached);
+        setIntroConfigLoaded(true);
+      })
+      .catch(() => {});
+
+    fetchAppIntroConfig()
+      .then((cfg) => {
+        if (cancelled) return;
+        applyIntro(cfg);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setIntroUseVideo(false);
+          setIntroVideoUrl(null);
+          setShowIntro(Platform.OS !== "web");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIntroConfigLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const hideNativeSplash = useCallback(() => {
+    SplashScreen.hideAsync().catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!fontsLoaded && !fontError) return;
+    if (!introConfigLoaded) return;
+    hideNativeSplash();
+  }, [fontsLoaded, fontError, introConfigLoaded, hideNativeSplash]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setIntroConfigLoaded((loaded) => {
+        if (!loaded) hideNativeSplash();
+        return true;
+      });
+    }, 6000);
+    return () => clearTimeout(t);
+  }, [hideNativeSplash]);
 
   useEffect(() => {
     try {
@@ -212,16 +294,42 @@ export default function RootLayout() {
 
   if (!fontsLoaded && !fontError) return null;
 
+  const showVideoIntro = showIntro && introUseVideo && Boolean(introVideoUrl);
+  const showLottieIntro =
+    showIntro && introConfigLoaded && !introVideoUrl && Platform.OS !== "web";
+
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <AppProvider>
           <CartProvider>
             <GestureHandlerRootView style={{ flex: 1 }}>
-              <KeyboardProvider>
-                <StatusBar style="dark" />
-                <SecuredApp />
-              </KeyboardProvider>
+              <StatusBar style="dark" />
+              {!introConfigLoaded ? (
+                <View
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    zIndex: 999,
+                    backgroundColor: "#000",
+                  }}
+                />
+              ) : null}
+              {showVideoIntro ? (
+                <AppIntroSplash
+                  visible
+                  videoUrl={introVideoUrl!}
+                  durationSeconds={introDurationSeconds}
+                  onDone={finishIntro}
+                  onPlaybackStarted={hideNativeSplash}
+                />
+              ) : showLottieIntro ? (
+                <PremiumRepairIntro visible onDone={finishIntro} />
+              ) : null}
+              <SecuredApp />
             </GestureHandlerRootView>
           </CartProvider>
         </AppProvider>
