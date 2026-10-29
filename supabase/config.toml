@@ -1,0 +1,12 @@
+# Deploy: supabase functions deploy mobi-api --no-verify-jwt
+# App JSON APIs: EXPO_PUBLIC_API_BACKEND=supabase (default). Uploads stay on Cloud Run.
+project_id = "ttjqexqkdvflcwwkyloq"
+
+[functions.reels-gateway]
+verify_jwt = false
+
+[functions.mobi-api]
+verify_jwt = false
+
+[functions.mobi-web]
+verify_jwt = false
